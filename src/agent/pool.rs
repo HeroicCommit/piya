@@ -14,6 +14,7 @@ use crate::config::Settings;
 /// Run `workers` loops until the queue is drained (`continuous = false`) or forever.
 pub fn run_pool(settings: Settings, workers: usize, interactive: bool, continuous: bool) -> Result<()> {
     let workers = workers.max(1);
+    crate::cpu_monitor::start("worker");
     info!("Starting {workers} worker(s)");
     let pid = std::process::id();
     let mut handles = Vec::new();

@@ -227,6 +227,7 @@ async fn run_async(cli: Cli, settings: Settings) -> Result<()> {
                 })
                 .await?;
             }
+            piya::cpu_monitor::start("worker");
             let mut agent = AgentLoop::new(settings, true)?.with_interactive(interactive);
             if continuous {
                 agent.run_continuous().await?;

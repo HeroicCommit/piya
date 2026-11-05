@@ -182,9 +182,18 @@ impl StdioMcpSession {
 
     fn read_line(&mut self) -> Result<String> {
         let mut line = String::new();
-        self.reader
+        let n = self
+            .reader
             .read_line(&mut line)
             .context("read MCP stdout")?;
+        // 0 bytes = EOF: the server exited or closed stdout. Without this check the
+        // request loop treats the empty string as "skip" and spins at 100% CPU.
+        if n == 0 {
+            return Err(anyhow!(
+                "MCP `{}` closed its output (server exited?)",
+                self.server_name
+            ));
+        }
         Ok(line)
     }
 
@@ -722,5 +731,23 @@ mod tests {
             .openai_tools()
             .iter()
             .any(|t| t.function.name.contains("talk_send_message")));
+    }
+
+    /// A server that exits immediately must produce a prompt error, not a busy loop.
+    #[test]
+    fn dead_stdio_server_errors_quickly_instead_of_spinning() {
+        let started = std::time::Instant::now();
+        let result = StdioMcpSession::spawn(
+            "dead",
+            "sh",
+            &["-c".to_string(), "exit 0".to_string()],
+            &HashMap::new(),
+        );
+        assert!(result.is_err(), "initialize must fail when the server is gone");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "took {:?}; request loop is spinning",
+            started.elapsed()
+        );
     }
 }

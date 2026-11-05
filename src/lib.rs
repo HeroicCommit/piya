@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod cpu_monitor;
 pub mod chat_cancel;
 pub mod chat_engine;
 pub mod chat_service;
