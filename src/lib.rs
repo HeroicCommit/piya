@@ -1,0 +1,30 @@
+pub mod agent;
+pub mod chat_cancel;
+pub mod chat_engine;
+pub mod chat_service;
+pub mod chat_session;
+pub mod chat_tools;
+pub mod config;
+pub mod ffi;
+pub mod launch_agent;
+pub mod llm;
+pub mod mcp;
+pub mod mcp_config;
+pub mod memory;
+pub mod notify;
+pub mod output;
+pub mod prefs;
+pub mod process_util;
+pub mod reminder;
+pub mod remote_shell;
+pub mod runtime;
+pub mod schedule;
+pub mod shell;
+pub mod tasks;
+pub mod ui;
+pub mod worker;
+
+uniffi::setup_scaffolding!("piya");
+
+pub use config::Settings;
+pub use memory::VectorMemory;

@@ -1,0 +1,12 @@
+.env
+data/
+workspace/
+target/
+macos/PiyaApp/.build/
+.venv/
+node_modules/
+dist/
+.DS_Store
+**/.DS_Store
+*.o
+.build/
