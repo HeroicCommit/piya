@@ -7,6 +7,20 @@ use uuid::Uuid;
 
 use serde::Serialize;
 
+/// A task whose worker has not heartbeated for this long is handed back to the queue.
+/// Workers heartbeat every [`HEARTBEAT_INTERVAL_SECS`].
+pub const HEARTBEAT_TIMEOUT_SECS: i64 = 90;
+pub const HEARTBEAT_INTERVAL_SECS: u64 = 10;
+
+/// Stable id for this process, used as the task owner (`pid-xxxxxxxx`).
+pub fn default_worker_id() -> &'static str {
+    static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ID.get_or_init(|| {
+        let short = &Uuid::new_v4().to_string()[..8];
+        format!("{}-{short}", std::process::id())
+    })
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
@@ -60,6 +74,7 @@ pub struct Task {
     pub recurrence: Option<String>,
 }
 
+#[derive(Clone)]
 pub struct TaskQueue {
     db_path: PathBuf,
 }
@@ -74,7 +89,11 @@ impl TaskQueue {
     }
 
     fn connect(&self) -> Result<Connection> {
-        Connection::open(&self.db_path).context("open task database")
+        let conn = Connection::open(&self.db_path).context("open task database")?;
+        // Several worker processes/threads share this file: wait instead of failing.
+        conn.busy_timeout(std::time::Duration::from_secs(10))
+            .context("set busy_timeout")?;
+        Ok(conn)
     }
 
     fn init_db(&self) -> Result<()> {
@@ -82,6 +101,8 @@ impl TaskQueue {
             std::fs::create_dir_all(parent)?;
         }
         let conn = self.connect()?;
+        // WAL lets readers (UI) and writers (workers) proceed concurrently.
+        let _mode: String = conn.query_row("PRAGMA journal_mode=WAL", [], |r| r.get(0))?;
         conn.execute_batch(
             "
             CREATE TABLE IF NOT EXISTS tasks (
@@ -128,6 +149,12 @@ impl TaskQueue {
         }
         if !cols.iter().any(|c| c == "recurrence") {
             conn.execute("ALTER TABLE tasks ADD COLUMN recurrence TEXT", [])?;
+        }
+        // Worker ownership: which worker runs the task and when it last proved it is alive.
+        for col in ["worker_id", "claimed_at", "heartbeat_at"] {
+            if !cols.iter().any(|c| c == col) {
+                conn.execute(&format!("ALTER TABLE tasks ADD COLUMN {col} TEXT"), [])?;
+            }
         }
         Ok(())
     }
@@ -298,14 +325,7 @@ impl TaskQueue {
 
     /// Reset tasks stuck in `in_progress` (e.g. after a crashed worker).
     pub fn reset_stale_in_progress(&self, max_age_secs: i64) -> Result<usize> {
-        let cutoff = (Utc::now() - chrono::Duration::seconds(max_age_secs)).to_rfc3339();
-        let conn = self.connect()?;
-        let n = conn.execute(
-            "UPDATE tasks SET status = 'pending', updated_at = ?1
-             WHERE status = 'in_progress' AND updated_at < ?2",
-            params![Self::now(), cutoff],
-        )?;
-        Ok(n)
+        self.reclaim_stale(max_age_secs)
     }
 
     pub fn count_due_pending(&self) -> Result<usize> {
@@ -354,8 +374,67 @@ impl TaskQueue {
         Ok(Some(secs))
     }
 
+    /// Atomically claim the next due pending task for `worker_id`.
+    ///
+    /// A single `UPDATE … RETURNING` statement picks and marks the row, so two
+    /// workers can never claim the same task.
+    pub fn claim_next(&self, worker_id: &str) -> Result<Option<Task>> {
+        self.reclaim_stale(HEARTBEAT_TIMEOUT_SECS)?;
+        let now = Self::now();
+        let conn = self.connect()?;
+        let task = conn
+            .query_row(
+                "
+                UPDATE tasks
+                   SET status = 'in_progress', worker_id = ?1, claimed_at = ?2,
+                       heartbeat_at = ?2, updated_at = ?2
+                 WHERE id = (
+                         SELECT id FROM tasks
+                          WHERE status = 'pending'
+                            AND (run_at IS NULL OR run_at <= ?2)
+                          ORDER BY priority DESC, created_at ASC
+                          LIMIT 1)
+                   AND status = 'pending'
+                RETURNING *
+                ",
+                params![worker_id, now],
+                row_to_task,
+            )
+            .optional()?;
+        Ok(task)
+    }
+
+    /// Record that `worker_id` is still working on `id`. Returns `false` when the
+    /// task is no longer owned by this worker (cancelled, reclaimed, finished).
+    pub fn heartbeat(&self, id: &str, worker_id: &str) -> Result<bool> {
+        let now = Self::now();
+        let conn = self.connect()?;
+        let n = conn.execute(
+            "UPDATE tasks SET heartbeat_at = ?1
+              WHERE id = ?2 AND worker_id = ?3 AND status = 'in_progress'",
+            params![now, id, worker_id],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Return tasks whose worker stopped heartbeating (crashed or killed) to `pending`.
+    /// Workers started before heartbeats existed fall back to `updated_at`.
+    pub fn reclaim_stale(&self, timeout_secs: i64) -> Result<usize> {
+        let cutoff = (Utc::now() - chrono::Duration::seconds(timeout_secs)).to_rfc3339();
+        let conn = self.connect()?;
+        let n = conn.execute(
+            "UPDATE tasks
+                SET status = 'pending', worker_id = NULL, claimed_at = NULL,
+                    heartbeat_at = NULL, updated_at = ?1
+              WHERE status = 'in_progress'
+                AND COALESCE(heartbeat_at, updated_at) < ?2",
+            params![Self::now(), cutoff],
+        )?;
+        Ok(n)
+    }
+
     pub fn next_pending(&self) -> Result<Option<Task>> {
-        self.reset_stale_in_progress(120)?;
+        self.reclaim_stale(HEARTBEAT_TIMEOUT_SECS)?;
         let now = Self::now();
         let conn = self.connect()?;
         let mut stmt = conn.prepare(
@@ -389,7 +468,9 @@ impl TaskQueue {
             conn.execute(
                 "
                 UPDATE tasks SET status = ?1, result = COALESCE(?2, result),
-                       best_accuracy = MAX(best_accuracy, ?3), updated_at = ?4
+                       best_accuracy = MAX(best_accuracy, ?3), updated_at = ?4,
+                       worker_id = CASE WHEN ?1 = 'in_progress' THEN worker_id END,
+                       heartbeat_at = CASE WHEN ?1 = 'in_progress' THEN heartbeat_at END
                 WHERE id = ?5
                 ",
                 params![status.as_str(), result, accuracy, now, id],
@@ -397,7 +478,9 @@ impl TaskQueue {
         } else {
             conn.execute(
                 "
-                UPDATE tasks SET status = ?1, result = COALESCE(?2, result), updated_at = ?3
+                UPDATE tasks SET status = ?1, result = COALESCE(?2, result), updated_at = ?3,
+                       worker_id = CASE WHEN ?1 = 'in_progress' THEN worker_id END,
+                       heartbeat_at = CASE WHEN ?1 = 'in_progress' THEN heartbeat_at END
                 WHERE id = ?4
                 ",
                 params![status.as_str(), result, now, id],
@@ -539,6 +622,74 @@ mod tests {
         assert_eq!(updated.title, "updated title");
         queue.cancel(&task.id).unwrap();
         assert_eq!(queue.get(&task.id).unwrap().status, TaskStatus::Blocked);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    fn temp_queue(tag: &str) -> (TaskQueue, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("piya-{tag}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        (TaskQueue::new(dir.join("piya.db")).unwrap(), dir)
+    }
+
+    #[test]
+    fn concurrent_claims_never_double_run() {
+        let (queue, dir) = temp_queue("claim");
+        let total = 40;
+        for i in 0..total {
+            queue.add(&format!("t{i}"), "work", 0, "").unwrap();
+        }
+        let db = dir.join("piya.db");
+        let handles: Vec<_> = (0..6)
+            .map(|w| {
+                let db = db.clone();
+                std::thread::spawn(move || {
+                    let q = TaskQueue::new(db).unwrap();
+                    let mut mine = Vec::new();
+                    while let Some(t) = q.claim_next(&format!("w{w}")).unwrap() {
+                        mine.push(t.id);
+                    }
+                    mine
+                })
+            })
+            .collect();
+        let mut all: Vec<String> = handles.into_iter().flat_map(|h| h.join().unwrap()).collect();
+        assert_eq!(all.len(), total, "every task claimed");
+        all.sort();
+        all.dedup();
+        assert_eq!(all.len(), total, "no task claimed twice");
+        assert_eq!(queue.count(Some(TaskStatus::InProgress)).unwrap(), total);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn stale_claims_are_reclaimed_but_heartbeating_ones_are_not() {
+        let (queue, dir) = temp_queue("stale");
+        let a = queue.add("a", "work", 0, "").unwrap();
+        let claimed = queue.claim_next("w1").unwrap().unwrap();
+        assert_eq!(claimed.id, a.id);
+        assert!(queue.heartbeat(&a.id, "w1").unwrap());
+        assert!(!queue.heartbeat(&a.id, "other").unwrap(), "wrong owner");
+
+        // Fresh heartbeat: not reclaimed.
+        assert_eq!(queue.reclaim_stale(HEARTBEAT_TIMEOUT_SECS).unwrap(), 0);
+
+        // Age the heartbeat: reclaimed, claimable again by another worker.
+        let old = (Utc::now() - chrono::Duration::seconds(600)).to_rfc3339();
+        queue
+            .connect()
+            .unwrap()
+            .execute("UPDATE tasks SET heartbeat_at = ?1", params![old])
+            .unwrap();
+        assert_eq!(queue.reclaim_stale(HEARTBEAT_TIMEOUT_SECS).unwrap(), 1);
+        assert!(!queue.heartbeat(&a.id, "w1").unwrap(), "old owner lost the task");
+        let again = queue.claim_next("w2").unwrap().unwrap();
+        assert_eq!(again.id, a.id);
+
+        // Finishing releases ownership.
+        queue
+            .update_status(&a.id, TaskStatus::Done, Some("ok"), Some(1.0))
+            .unwrap();
+        assert!(!queue.heartbeat(&a.id, "w2").unwrap());
         let _ = std::fs::remove_dir_all(dir);
     }
 }

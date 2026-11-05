@@ -98,10 +98,13 @@ impl AgentLoop {
 
     pub async fn run_once(&mut self) -> Result<Option<CycleResult>> {
         self.ensure_llm()?;
-        let Some(task) = self.tasks.next_pending()? else {
+        let worker_id = crate::tasks::default_worker_id();
+        let Some(task) = self.tasks.claim_next(worker_id)? else {
             info!("No pending tasks. Add one with: piya add \"title\" \"description\"");
             return Ok(None);
         };
+        // Keep the claim alive while the (possibly long) task runs.
+        let _heartbeat = HeartbeatGuard::start(self.tasks.clone(), task.id.clone(), worker_id);
         Ok(Some(self.run_task_cycle(task).await?))
     }
 
@@ -581,5 +584,41 @@ impl AgentLoop {
     pub fn memory_mut(&mut self) -> Result<&mut VectorMemory> {
         self.ensure_llm()?;
         Ok(self.memory.as_mut().expect("memory"))
+    }
+}
+
+/// Periodically refreshes a task's heartbeat so other workers do not reclaim it.
+/// Stops when dropped (task finished, failed or the future was cancelled).
+struct HeartbeatGuard {
+    handle: tokio::task::JoinHandle<()>,
+}
+
+impl HeartbeatGuard {
+    fn start(queue: TaskQueue, task_id: String, worker_id: &'static str) -> Self {
+        let handle = tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(
+                crate::tasks::HEARTBEAT_INTERVAL_SECS,
+            ));
+            tick.tick().await; // first tick is immediate; the claim already set it
+            loop {
+                tick.tick().await;
+                let q = queue.clone();
+                let id = task_id.clone();
+                let alive =
+                    tokio::task::spawn_blocking(move || q.heartbeat(&id, worker_id)).await;
+                match alive {
+                    Ok(Ok(true)) => {}
+                    // Lost ownership (cancelled/reclaimed) or db error: stop quietly.
+                    _ => break,
+                }
+            }
+        });
+        Self { handle }
+    }
+}
+
+impl Drop for HeartbeatGuard {
+    fn drop(&mut self) {
+        self.handle.abort();
     }
 }
