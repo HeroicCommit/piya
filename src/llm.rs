@@ -311,6 +311,20 @@ fn http_client() -> reqwest::Client {
 
 const MAX_ATTEMPTS: u32 = 3;
 
+/// Process-wide cap on in-flight LLM requests so parallel workers do not trip rate
+/// limits. `PIYA_LLM_CONCURRENCY` (default 4).
+fn llm_permits() -> &'static tokio::sync::Semaphore {
+    static PERMITS: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    PERMITS.get_or_init(|| {
+        let n = std::env::var("PIYA_LLM_CONCURRENCY")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|n| *n > 0)
+            .unwrap_or(4);
+        tokio::sync::Semaphore::new(n)
+    })
+}
+
 /// Network-level failures worth retrying. API errors (bad request, auth) are not.
 /// Rate limits (429) are already retried with backoff inside async-openai.
 fn is_transient(err: &OpenAIError) -> bool {
@@ -328,7 +342,12 @@ where
 {
     let mut attempt = 1;
     loop {
-        match op().await {
+        // Hold a permit only while the request is in flight, not during backoff.
+        let result = {
+            let _permit = llm_permits().acquire().await;
+            op().await
+        };
+        match result {
             Ok(v) => return Ok(v),
             Err(err) if attempt < MAX_ATTEMPTS && is_transient(&err) => {
                 let delay = Duration::from_secs(1 << (attempt - 1));

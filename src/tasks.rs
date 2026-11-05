@@ -433,6 +433,31 @@ impl TaskQueue {
         Ok(n)
     }
 
+    /// A task attempt crashed with `error` (network failure, panic-free bug, …).
+    /// Retry later with a growing delay, or fail the task once attempts are used up,
+    /// instead of leaving it `in_progress` to be reclaimed and retried forever.
+    pub fn release_after_error(&self, id: &str, error: &str, max_attempts: u32) -> Result<Task> {
+        let task = self.get(id)?;
+        let note = format!("Error: {error}");
+        if task.attempts as u32 >= max_attempts.max(1) {
+            let t = self.update_status(id, TaskStatus::Failed, Some(&note), None)?;
+            if t.recurrence.is_some() {
+                let _ = self.reschedule_if_recurring(id)?;
+            }
+            return self.get(id);
+        }
+        let delay = chrono::Duration::seconds(60 * i64::from(task.attempts.max(1)));
+        let retry_at = (Utc::now() + delay).to_rfc3339();
+        let conn = self.connect()?;
+        conn.execute(
+            "UPDATE tasks SET status = 'pending', result = ?1, run_at = ?2, updated_at = ?3,
+                    worker_id = NULL, claimed_at = NULL, heartbeat_at = NULL
+              WHERE id = ?4",
+            params![format!("{note} (retrying)"), retry_at, Self::now(), id],
+        )?;
+        self.get(id)
+    }
+
     pub fn next_pending(&self) -> Result<Option<Task>> {
         self.reclaim_stale(HEARTBEAT_TIMEOUT_SECS)?;
         let now = Self::now();
@@ -690,6 +715,24 @@ mod tests {
             .update_status(&a.id, TaskStatus::Done, Some("ok"), Some(1.0))
             .unwrap();
         assert!(!queue.heartbeat(&a.id, "w2").unwrap());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn release_after_error_retries_then_fails() {
+        let (queue, dir) = temp_queue("release");
+        let t = queue.add("flaky", "do work", 0, "").unwrap();
+        queue.claim_next("w").unwrap().unwrap();
+        queue.increment_attempts(&t.id).unwrap();
+        let r = queue.release_after_error(&t.id, "network down", 3).unwrap();
+        assert_eq!(r.status, TaskStatus::Pending);
+        assert!(r.run_at.is_some(), "retry is delayed");
+        assert!(queue.claim_next("w").unwrap().is_none(), "not due yet");
+        queue.increment_attempts(&t.id).unwrap();
+        queue.increment_attempts(&t.id).unwrap();
+        let f = queue.release_after_error(&t.id, "network down", 3).unwrap();
+        assert_eq!(f.status, TaskStatus::Failed);
+        assert!(f.result.unwrap().contains("network down"));
         let _ = std::fs::remove_dir_all(dir);
     }
 }

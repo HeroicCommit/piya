@@ -14,6 +14,8 @@ pub struct Settings {
     pub max_cycles: u64,
     pub min_accuracy: f64,
     pub max_retries: u32,
+    /// Parallel task workers for `piya run` (`PIYA_WORKERS`, default 3, max 8).
+    pub workers: usize,
 }
 
 impl Settings {
@@ -33,6 +35,7 @@ impl Settings {
             max_cycles: parse_env("PIYA_MAX_CYCLES", 0)?,
             min_accuracy: parse_env("PIYA_MIN_ACCURACY", 0.7)?,
             max_retries: parse_env("PIYA_MAX_RETRIES", 3)?,
+            workers: parse_env::<usize>("PIYA_WORKERS", 3)?.clamp(1, 8),
         };
 
         settings.ensure_dirs()?;
