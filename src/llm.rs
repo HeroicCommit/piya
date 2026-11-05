@@ -1,6 +1,7 @@
 use anyhow::{anyhow, Context, Result};
 use async_openai::{
     config::OpenAIConfig,
+    error::OpenAIError,
     types::{
         ChatCompletionRequestAssistantMessage,
         ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
@@ -12,6 +13,7 @@ use async_openai::{
     Client,
 };
 use serde_json::Value;
+use std::time::Duration;
 
 use crate::config::Settings;
 
@@ -40,7 +42,7 @@ impl LlmClient {
             .with_api_base(settings.openai_base_url.clone());
 
         Ok(Self {
-            client: Client::with_config(config),
+            client: Client::with_config(config).with_http_client(http_client()),
             model: settings.model.clone(),
             embedding_model: settings.embedding_model.clone(),
         })
@@ -107,12 +109,8 @@ impl LlmClient {
         }
 
         let request: CreateChatCompletionRequest = req.build()?;
-        let response = self
-            .client
-            .chat()
-            .create(request)
-            .await
-            .map_err(|err| anyhow!("chat completion failed: {err:#}"))?;
+        let chat = self.client.chat();
+        let response = with_retries("chat completion", || chat.create(request.clone())).await?;
 
         Ok(response
             .choices
@@ -202,19 +200,16 @@ impl LlmClient {
 
         let request: CreateChatCompletionRequest = req.build()?;
         let chat = self.client.chat();
+        let call = with_retries("chat completion", || chat.create(request.clone()));
         let response = if let Some(epoch) = cancel_epoch {
             tokio::select! {
                 _ = crate::chat_cancel::wait_cancelled(epoch) => {
                     return Err(anyhow!("cancelled"));
                 }
-                result = chat.create(request) => {
-                    result.map_err(|err| anyhow!("chat completion failed: {err:#}"))?
-                }
+                result = call => result?,
             }
         } else {
-            chat.create(request)
-                .await
-                .map_err(|err| anyhow!("chat completion failed: {err:#}"))?
+            call.await?
         };
 
         response
@@ -287,18 +282,66 @@ impl LlmClient {
             .input(truncated)
             .build()?;
 
-        let response = self
-            .client
-            .embeddings()
-            .create(request)
-            .await
-            .context("embedding request failed")?;
+        let embeddings = self.client.embeddings();
+        let response =
+            with_retries("embedding request", || embeddings.create(request.clone())).await?;
 
         Ok(response
             .data
             .into_iter()
             .map(|d| d.embedding)
             .collect())
+    }
+}
+
+/// HTTP client with a request timeout so a stalled server cannot hang Piya forever.
+/// Override with `PIYA_LLM_TIMEOUT_SEC` (default 180; local models may need more).
+fn http_client() -> reqwest::Client {
+    let secs = std::env::var("PIYA_LLM_TIMEOUT_SEC")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(180);
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(secs))
+        .build()
+        .unwrap_or_default()
+}
+
+const MAX_ATTEMPTS: u32 = 3;
+
+/// Network-level failures worth retrying. API errors (bad request, auth) are not.
+/// Rate limits (429) are already retried with backoff inside async-openai.
+fn is_transient(err: &OpenAIError) -> bool {
+    match err {
+        OpenAIError::Reqwest(e) => e.is_timeout() || e.is_connect() || e.is_request(),
+        _ => false,
+    }
+}
+
+/// Run `op`, retrying transient network errors with 1s, 2s backoff.
+async fn with_retries<T, F, Fut>(what: &str, mut op: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, OpenAIError>>,
+{
+    let mut attempt = 1;
+    loop {
+        match op().await {
+            Ok(v) => return Ok(v),
+            Err(err) if attempt < MAX_ATTEMPTS && is_transient(&err) => {
+                let delay = Duration::from_secs(1 << (attempt - 1));
+                eprintln!(
+                    "piya: {what} failed ({err}); retry {attempt}/{} in {}s",
+                    MAX_ATTEMPTS - 1,
+                    delay.as_secs()
+                );
+                tokio::time::sleep(delay).await;
+                attempt += 1;
+            }
+            Err(err) => return Err(anyhow!("{what} failed: {err:#}")),
+        }
     }
 }
 
