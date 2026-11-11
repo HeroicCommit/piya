@@ -5,6 +5,28 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
+DEV_MODE=0
+for arg in "$@"; do
+  case "$arg" in
+    --dev) DEV_MODE=1 ;;
+    -h|--help)
+      echo "Usage: $0 [--dev]"
+      echo "  --dev   Build isolated side-by-side 'Piya Dev' bundle (com.piya.swiftui.dev)"
+      exit 0
+      ;;
+    *)
+      echo "Unknown argument: $arg" >&2
+      exit 1
+      ;;
+  esac
+done
+
+VERSION="$(awk -F'"' '/^version = "/{print $2; exit}' "$ROOT/Cargo.toml")"
+if [[ -z "$VERSION" ]]; then
+  echo "Failed to read version from Cargo.toml" >&2
+  exit 1
+fi
+
 echo "==> Building Rust library (release, Swift — no wry/tao)…"
 cargo build --release --no-default-features
 
@@ -52,7 +74,17 @@ fi
 
 BIN="$ROOT/macos/PiyaApp/.build/release/Piya"
 STAGE="$ROOT/dist/build.noindex"
-APP="$STAGE/PiyaSwift.app"
+if [[ "$DEV_MODE" -eq 1 ]]; then
+  APP="$STAGE/PiyaDev.app"
+  BUNDLE_ID="com.piya.swiftui.dev"
+  BUNDLE_NAME="Piya Dev"
+  SHORT_VERSION="${VERSION}-dev"
+else
+  APP="$STAGE/PiyaSwift.app"
+  BUNDLE_ID="com.piya.swiftui"
+  BUNDLE_NAME="Piya"
+  SHORT_VERSION="$VERSION"
+fi
 ICON_SRC="$ROOT/assets/AppIcon.png"
 
 echo "==> Packaging $APP …"
@@ -101,12 +133,12 @@ cat > "$APP/Contents/Info.plist" <<EOF
   <key>CFBundleDevelopmentRegion</key><string>en</string>
   <key>CFBundleExecutable</key><string>Piya</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleIdentifier</key><string>com.piya.swiftui</string>
-  <key>CFBundleName</key><string>Piya</string>
-  <key>CFBundleDisplayName</key><string>Piya</string>
+  <key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>
+  <key>CFBundleName</key><string>${BUNDLE_NAME}</string>
+  <key>CFBundleDisplayName</key><string>${BUNDLE_NAME}</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.2.0</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>${SHORT_VERSION}</string>
+  <key>CFBundleVersion</key><string>${VERSION}</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
@@ -116,13 +148,19 @@ cat > "$APP/Contents/Info.plist" <<EOF
 </plist>
 EOF
 
-codesign --force --deep --sign - "$APP" 2>/dev/null || true
+SIGN_IDENTITY="${PIYA_CODESIGN_IDENTITY:--}"
+codesign --force --deep --sign "$SIGN_IDENTITY" "$APP" 2>/dev/null || true
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$APP" 2>/dev/null || true
 
 echo ""
-echo "Built:   $APP"
-echo "Install: ./target/release/piya app --install"
-echo "Run:     open \"$APP\""
+echo "Built:          $APP (v${SHORT_VERSION})"
+if [[ "$DEV_MODE" -eq 1 ]]; then
+  echo "Run side-by-side (leaves /Applications/Piya.app untouched):"
+  echo "  open \"$APP\""
+else
+  echo "Update in place: ./target/release/piya update --local"
+  echo "First install:   ./target/release/piya app --install"
+fi
 echo ""
 echo "Menu bar → Ask Piya"
 echo "Shortcut (when Piya is focused): ⌃⌘Space"

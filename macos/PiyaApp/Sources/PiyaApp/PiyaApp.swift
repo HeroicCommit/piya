@@ -7,6 +7,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         TaskNotificationWatcher.shared.start()
         DueTaskScheduler.shared.start()
+        Task { @MainActor in
+            UpdateController.shared.startBackgroundChecks()
+        }
         if CommandLine.arguments.contains("--open-chat") {
             DispatchQueue.main.async {
                 HummingbirdPanelController.shared.show()
@@ -29,14 +32,18 @@ private struct SettingsMenuButton: View {
 
     var body: some View {
         Button("Settings…") {
-            NSApp.activate(ignoringOtherApps: true)
-            openSettings()
-            // The window is created asynchronously; raise it right away and again
-            // shortly after in case it appeared late.
-            DispatchQueue.main.async { Self.raiseSettingsWindow() }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { Self.raiseSettingsWindow() }
+            Self.openAndRaiseSettings(using: openSettings)
         }
         .keyboardShortcut(",")
+    }
+
+    static func openAndRaiseSettings(using openSettings: OpenSettingsAction) {
+        NSApp.activate(ignoringOtherApps: true)
+        openSettings()
+        // The window is created asynchronously; raise it right away and again
+        // shortly after in case it appeared late.
+        DispatchQueue.main.async { raiseSettingsWindow() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { raiseSettingsWindow() }
     }
 
     private static func raiseSettingsWindow() {
@@ -57,6 +64,26 @@ private struct SettingsMenuButton: View {
     }
 }
 
+private struct CheckForUpdatesMenuButton: View {
+    @Environment(\.openSettings) private var openSettings
+    @ObservedObject private var updater = UpdateController.shared
+
+    var body: some View {
+        Button(label) {
+            updater.selectedSettingsTab = .general
+            SettingsMenuButton.openAndRaiseSettings(using: openSettings)
+            updater.check(silent: false)
+        }
+    }
+
+    private var label: String {
+        if let v = updater.availableVersion {
+            return "Update Available (v\(v))…"
+        }
+        return "Check for Updates…"
+    }
+}
+
 @main
 struct PiyaApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -69,6 +96,7 @@ struct PiyaApp: App {
             .keyboardShortcut(" ", modifiers: [.control, .command])
 
             SettingsMenuButton()
+            CheckForUpdatesMenuButton()
 
             Divider()
 

@@ -692,3 +692,36 @@ pub fn piya_delete_memory(id: String) -> Result<(), PiyaError> {
     let (_llm, memory) = crate::chat_engine::llm_and_memory(&settings).map_err(map_err)?;
     crate::runtime::block_on(async move { memory.delete_by_id(&id).await }).map_err(map_err)
 }
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiUpdateCheck {
+    pub current_version: String,
+    pub latest_version: String,
+    pub update_available: bool,
+    pub release_url: String,
+    pub release_notes: String,
+    pub published_at: String,
+    pub has_asset: bool,
+}
+
+#[uniffi::export]
+pub fn piya_check_for_update() -> Result<FfiUpdateCheck, PiyaError> {
+    let check = crate::updater::check_for_update().map_err(map_err)?;
+    Ok(FfiUpdateCheck {
+        current_version: check.current_version,
+        latest_version: check.latest_version,
+        update_available: check.update_available,
+        release_url: check.release_url,
+        release_notes: check.release_notes,
+        published_at: check.published_at,
+        has_asset: check.asset_url.is_some(),
+    })
+}
+
+/// Downloads and stages the latest release in `/Applications/.Piya-update.noindex`,
+/// verifies SHA-256 and code signature, and spawns a detached helper that atomically
+/// swaps `/Applications/Piya.app` and relaunches once this GUI process exits.
+#[uniffi::export]
+pub fn piya_install_update_and_relaunch() -> Result<String, PiyaError> {
+    crate::updater::prepare_gui_self_update().map_err(map_err)
+}

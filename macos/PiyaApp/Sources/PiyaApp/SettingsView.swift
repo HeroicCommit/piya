@@ -139,20 +139,28 @@ private struct MemoryRow: Identifiable {
 // MARK: - Root
 
 struct SettingsView: View {
+    @ObservedObject private var updater = UpdateController.shared
+
     var body: some View {
-        TabView {
+        TabView(selection: $updater.selectedSettingsTab) {
             GeneralSettingsTab()
                 .tabItem { Label("General", systemImage: "gearshape") }
+                .tag(SettingsTab.general)
             YouSettingsTab()
                 .tabItem { Label("You", systemImage: "person") }
+                .tag(SettingsTab.you)
             MemorySettingsTab()
                 .tabItem { Label("Memory", systemImage: "brain") }
+                .tag(SettingsTab.memory)
             NotificationsSettingsTab()
                 .tabItem { Label("Notifications", systemImage: "bell") }
+                .tag(SettingsTab.notifications)
             ShellSettingsTab()
                 .tabItem { Label("Shell", systemImage: "terminal") }
+                .tag(SettingsTab.shell)
             McpSettingsTab()
                 .tabItem { Label("MCP", systemImage: "puzzlepiece.extension") }
+                .tag(SettingsTab.mcp)
         }
         .frame(minWidth: 760, minHeight: 540)
     }
@@ -175,6 +183,7 @@ private enum KnownChatModels {
 }
 
 private struct GeneralSettingsTab: View {
+    @ObservedObject private var updater = UpdateController.shared
     @State private var version = ""
     @State private var dataDir = ""
     @State private var workspace = ""
@@ -198,9 +207,14 @@ private struct GeneralSettingsTab: View {
         Form {
             Section("Piya") {
                 LabeledContent("Version") {
-                    Text(version.isEmpty ? "—" : version)
-                        .foregroundStyle(.secondary)
+                    HStack(spacing: 10) {
+                        Text(version.isEmpty ? "—" : version)
+                            .foregroundStyle(.secondary)
+                            .font(.system(.body, design: .monospaced))
+                        updateActionButton
+                    }
                 }
+                updateStatusRow
                 pathRow("Data", dataDir)
                 pathRow("Workspace", workspace)
             }
@@ -286,6 +300,94 @@ private struct GeneralSettingsTab: View {
         .formStyle(.grouped)
         .padding()
         .onAppear(perform: load)
+    }
+
+    @ViewBuilder
+    private var updateActionButton: some View {
+        switch updater.phase {
+        case .checking:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Checking…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case .installing:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Updating…")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        case .available(_, let latest, _, let url, let hasAsset):
+            if hasAsset {
+                Button("Update to v\(latest) & Relaunch") {
+                    updater.installAndRelaunch()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            } else if let releaseURL = URL(string: url), !url.isEmpty {
+                Button("Open Release v\(latest)…") {
+                    NSWorkspace.shared.open(releaseURL)
+                }
+                .controlSize(.small)
+            }
+        default:
+            Button("Check for Updates") {
+                updater.check(silent: false)
+            }
+            .controlSize(.small)
+        }
+    }
+
+    @ViewBuilder
+    private var updateStatusRow: some View {
+        switch updater.phase {
+        case .idle, .checking:
+            EmptyView()
+        case .upToDate(let v):
+            Label("Piya \(v) is up to date.", systemImage: "checkmark.circle.fill")
+                .font(.caption)
+                .foregroundStyle(.green)
+        case .available(let current, let latest, let notes, let url, _):
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Label("Piya \(latest) is available (installed: \(current)).", systemImage: "arrow.down.circle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.blue)
+                    Spacer()
+                    if let releaseURL = URL(string: url), !url.isEmpty {
+                        Link("Release notes", destination: releaseURL)
+                            .font(.caption)
+                    }
+                }
+                if !notes.isEmpty {
+                    DisclosureGroup("What's new") {
+                        Text(notes)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.top, 2)
+                    }
+                    .font(.caption)
+                }
+            }
+        case .installing(let v):
+            Text("Downloading v\(v), verifying SHA-256, and updating in place…")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        case .failed(let message):
+            VStack(alignment: .leading, spacing: 4) {
+                Label("Update failed", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+        }
     }
 
     @ViewBuilder

@@ -1396,6 +1396,116 @@ public func FfiConverterTypeFfiTaskItem_lower(_ value: FfiTaskItem) -> RustBuffe
 }
 
 
+public struct FfiUpdateCheck {
+    public var currentVersion: String
+    public var latestVersion: String
+    public var updateAvailable: Bool
+    public var releaseUrl: String
+    public var releaseNotes: String
+    public var publishedAt: String
+    public var hasAsset: Bool
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(currentVersion: String, latestVersion: String, updateAvailable: Bool, releaseUrl: String, releaseNotes: String, publishedAt: String, hasAsset: Bool) {
+        self.currentVersion = currentVersion
+        self.latestVersion = latestVersion
+        self.updateAvailable = updateAvailable
+        self.releaseUrl = releaseUrl
+        self.releaseNotes = releaseNotes
+        self.publishedAt = publishedAt
+        self.hasAsset = hasAsset
+    }
+}
+
+#if compiler(>=6)
+extension FfiUpdateCheck: Sendable {}
+#endif
+
+
+extension FfiUpdateCheck: Equatable, Hashable {
+    public static func ==(lhs: FfiUpdateCheck, rhs: FfiUpdateCheck) -> Bool {
+        if lhs.currentVersion != rhs.currentVersion {
+            return false
+        }
+        if lhs.latestVersion != rhs.latestVersion {
+            return false
+        }
+        if lhs.updateAvailable != rhs.updateAvailable {
+            return false
+        }
+        if lhs.releaseUrl != rhs.releaseUrl {
+            return false
+        }
+        if lhs.releaseNotes != rhs.releaseNotes {
+            return false
+        }
+        if lhs.publishedAt != rhs.publishedAt {
+            return false
+        }
+        if lhs.hasAsset != rhs.hasAsset {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(currentVersion)
+        hasher.combine(latestVersion)
+        hasher.combine(updateAvailable)
+        hasher.combine(releaseUrl)
+        hasher.combine(releaseNotes)
+        hasher.combine(publishedAt)
+        hasher.combine(hasAsset)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiUpdateCheck: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiUpdateCheck {
+        return
+            try FfiUpdateCheck(
+                currentVersion: FfiConverterString.read(from: &buf), 
+                latestVersion: FfiConverterString.read(from: &buf), 
+                updateAvailable: FfiConverterBool.read(from: &buf), 
+                releaseUrl: FfiConverterString.read(from: &buf), 
+                releaseNotes: FfiConverterString.read(from: &buf), 
+                publishedAt: FfiConverterString.read(from: &buf), 
+                hasAsset: FfiConverterBool.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiUpdateCheck, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.currentVersion, into: &buf)
+        FfiConverterString.write(value.latestVersion, into: &buf)
+        FfiConverterBool.write(value.updateAvailable, into: &buf)
+        FfiConverterString.write(value.releaseUrl, into: &buf)
+        FfiConverterString.write(value.releaseNotes, into: &buf)
+        FfiConverterString.write(value.publishedAt, into: &buf)
+        FfiConverterBool.write(value.hasAsset, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiUpdateCheck_lift(_ buf: RustBuffer) throws -> FfiUpdateCheck {
+    return try FfiConverterTypeFfiUpdateCheck.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiUpdateCheck_lower(_ value: FfiUpdateCheck) -> RustBuffer {
+    return FfiConverterTypeFfiUpdateCheck.lower(value)
+}
+
+
 public struct FfiUserPrefs {
     public var profile: String
     public var autoCapturePrefs: Bool
@@ -1928,6 +2038,12 @@ public func piyaChat(message: String, history: [FfiChatTurn])throws  -> String  
     )
 })
 }
+public func piyaCheckForUpdate()throws  -> FfiUpdateCheck  {
+    return try  FfiConverterTypeFfiUpdateCheck_lift(try rustCallWithError(FfiConverterTypePiyaError_lift) {
+    uniffi_piya_fn_func_piya_check_for_update($0
+    )
+})
+}
 public func piyaCreateChatSession(mode: String)throws  -> FfiChatSessionMeta  {
     return try  FfiConverterTypeFfiChatSessionMeta_lift(try rustCallWithError(FfiConverterTypePiyaError_lift) {
     uniffi_piya_fn_func_piya_create_chat_session(
@@ -1962,6 +2078,17 @@ public func piyaGetAppEnvSettings()throws  -> FfiAppEnvSettings  {
 public func piyaGetUserPrefs()throws  -> FfiUserPrefs  {
     return try  FfiConverterTypeFfiUserPrefs_lift(try rustCallWithError(FfiConverterTypePiyaError_lift) {
     uniffi_piya_fn_func_piya_get_user_prefs($0
+    )
+})
+}
+/**
+ * Downloads and stages the latest release in `/Applications/.Piya-update.noindex`,
+ * verifies SHA-256 and code signature, and spawns a detached helper that atomically
+ * swaps `/Applications/Piya.app` and relaunches once this GUI process exits.
+ */
+public func piyaInstallUpdateAndRelaunch()throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypePiyaError_lift) {
+    uniffi_piya_fn_func_piya_install_update_and_relaunch($0
     )
 })
 }
@@ -2124,6 +2251,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_piya_checksum_func_piya_chat() != 58657) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_piya_checksum_func_piya_check_for_update() != 56684) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_piya_checksum_func_piya_create_chat_session() != 4161) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -2140,6 +2270,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_piya_checksum_func_piya_get_user_prefs() != 16761) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_piya_checksum_func_piya_install_update_and_relaunch() != 44443) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_piya_checksum_func_piya_list_chat_sessions() != 18990) {

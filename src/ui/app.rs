@@ -16,7 +16,7 @@ pub fn install(settings: &Settings) -> Result<()> {
         std::fs::remove_dir_all(&dest).context("remove old Piya.app")?;
     }
 
-    copy_dir_recursive(&app, &dest)?;
+    crate::updater::copy_bundle_preserving_metadata(&app, &dest)?;
     let config_path = crate::config::write_app_support_config(settings)?;
     install_login_item(settings, &dest)?;
 
@@ -35,6 +35,18 @@ pub fn install(settings: &Settings) -> Result<()> {
     println!("Installed Piya to /Applications/Piya.app");
     println!("Config: {}", config_path.display());
     println!("Login item registered (starts at sign-in).");
+    Ok(())
+}
+
+pub fn update_from_local(settings: &Settings, force: bool) -> Result<()> {
+    let source = locate_app_bundle()?;
+    let dest = PathBuf::from(crate::updater::INSTALLED_APP_PATH);
+    let staged = crate::updater::stage_local_bundle(&source, &dest)?;
+    crate::updater::apply_staged_update_cli(settings, &staged, &dest, force)?;
+    println!(
+        "Updated {} in place (config, data, and login item untouched).",
+        dest.display()
+    );
     Ok(())
 }
 
@@ -142,21 +154,6 @@ fn is_installed_app_running() -> bool {
         .output()
         .map(|o| o.status.success())
         .unwrap_or(false)
-}
-
-fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {
-    std::fs::create_dir_all(dst)?;
-    for entry in std::fs::read_dir(src)? {
-        let entry = entry?;
-        let from = entry.path();
-        let to = dst.join(entry.file_name());
-        if from.is_dir() {
-            copy_dir_recursive(&from, &to)?;
-        } else {
-            std::fs::copy(&from, &to)?;
-        }
-    }
-    Ok(())
 }
 
 fn home() -> Result<PathBuf> {
