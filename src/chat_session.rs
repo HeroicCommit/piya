@@ -248,7 +248,16 @@ impl ChatSessionStore {
     pub fn create(&mut self, mode: &str) -> Result<SessionMeta> {
         let id = Uuid::new_v4().to_string();
         let mode = if mode.is_empty() { "chat" } else { mode }.to_string();
-        let now = now_unix();
+        // Timestamps have 1s resolution: keep a new session strictly newer than every
+        // existing one so list order is deterministic even for rapid "new chat" clicks.
+        let newest = self
+            .manifest
+            .sessions
+            .iter()
+            .map(|m| m.created_at)
+            .max()
+            .unwrap_or(0);
+        let now = now_unix().max(newest + 1);
         let meta = SessionMeta {
             id: id.clone(),
             title: "New chat".into(),

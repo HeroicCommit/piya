@@ -267,11 +267,64 @@ pub fn piya_send(
     }
 }
 
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiMcpToolInfo {
+    pub name: String,
+    pub description: String,
+}
+
+/// Result of Settings → "Test connection" (never throws; errors are in `error`).
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiMcpProbe {
+    pub ok: bool,
+    pub tools: Vec<FfiMcpToolInfo>,
+    pub error: String,
+}
+
+fn ffi_to_entry(s: FfiMcpServer) -> (String, McpServerEntry) {
+    let is_http = s.transport.eq_ignore_ascii_case("http") || !s.url.trim().is_empty();
+    (
+        s.name,
+        McpServerEntry {
+            command: s.command,
+            args: s.args,
+            env: s.env,
+            enabled: s.enabled,
+            transport: if is_http {
+                Some("http".into())
+            } else {
+                Some("stdio".into())
+            },
+            url: if is_http && !s.url.trim().is_empty() {
+                Some(s.url)
+            } else {
+                None
+            },
+            headers: s.headers,
+        },
+    )
+}
+
+/// Reject lists that would silently lose data when stored by name.
+fn validate_mcp_servers(servers: &[FfiMcpServer]) -> Result<(), String> {
+    let mut seen = std::collections::HashSet::new();
+    for s in servers {
+        let name = s.name.trim();
+        if name.is_empty() {
+            return Err("every MCP server needs a name".into());
+        }
+        if !seen.insert(name.to_lowercase()) {
+            return Err(format!("duplicate MCP server name `{name}`"));
+        }
+    }
+    Ok(())
+}
+
 #[uniffi::export]
 pub fn piya_list_mcp_servers() -> Result<Vec<FfiMcpServer>, PiyaError> {
     let settings = load_settings()?;
     let cfg = McpConfig::load(&settings.data_dir).map_err(map_err)?;
-    Ok(cfg
+    let mut servers: Vec<FfiMcpServer> = cfg
         .servers
         .into_iter()
         .map(|(name, entry)| {
@@ -296,35 +349,20 @@ pub fn piya_list_mcp_servers() -> Result<Vec<FfiMcpServer>, PiyaError> {
                 headers: entry.headers,
             }
         })
-        .collect())
+        .collect();
+    // HashMap order is random; keep the list stable between loads.
+    servers.sort_by_key(|s| s.name.to_lowercase());
+    Ok(servers)
 }
 
 #[uniffi::export]
 pub fn piya_save_mcp_servers(servers: Vec<FfiMcpServer>) -> Result<(), PiyaError> {
+    validate_mcp_servers(&servers).map_err(|message| PiyaError::Mcp { message })?;
     let settings = load_settings()?;
     let mut map = HashMap::new();
     for s in servers {
-        let is_http = s.transport.eq_ignore_ascii_case("http") || !s.url.trim().is_empty();
-        map.insert(
-            s.name,
-            McpServerEntry {
-                command: s.command,
-                args: s.args,
-                env: s.env,
-                enabled: s.enabled,
-                transport: if is_http {
-                    Some("http".into())
-                } else {
-                    Some("stdio".into())
-                },
-                url: if is_http && !s.url.trim().is_empty() {
-                    Some(s.url)
-                } else {
-                    None
-                },
-                headers: s.headers,
-            },
-        );
+        let (name, entry) = ffi_to_entry(s);
+        map.insert(name.trim().to_string(), entry);
     }
     McpConfig { servers: map }
         .save(&settings.data_dir)
@@ -333,6 +371,27 @@ pub fn piya_save_mcp_servers(servers: Vec<FfiMcpServer>) -> Result<(), PiyaError
         })?;
     crate::chat_engine::invalidate_mcp();
     Ok(())
+}
+
+/// Start the server, run the MCP handshake and list its tools (15s limit).
+#[uniffi::export]
+pub fn piya_test_mcp_server(server: FfiMcpServer) -> FfiMcpProbe {
+    let (name, entry) = ffi_to_entry(server);
+    match crate::mcp::client::probe_server(&name, &entry, std::time::Duration::from_secs(15)) {
+        Ok(tools) => FfiMcpProbe {
+            ok: true,
+            tools: tools
+                .into_iter()
+                .map(|(name, description)| FfiMcpToolInfo { name, description })
+                .collect(),
+            error: String::new(),
+        },
+        Err(err) => FfiMcpProbe {
+            ok: false,
+            tools: Vec::new(),
+            error: format!("{err:#}"),
+        },
+    }
 }
 
 #[uniffi::export]

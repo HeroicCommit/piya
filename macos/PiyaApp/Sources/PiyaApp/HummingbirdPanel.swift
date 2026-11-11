@@ -152,7 +152,7 @@ final class HummingbirdPanelController: NSObject, NSWindowDelegate {
 }
 
 /// Keyable floating window so resize edges and zoom behave like a normal app window.
-private final class HummingbirdWindow: NSWindow {
+final class HummingbirdWindow: NSWindow {
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { true }
 }

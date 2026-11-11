@@ -110,7 +110,15 @@ impl McpConfig {
     pub fn save(&self, data_dir: &Path) -> Result<()> {
         let path = Self::path(data_dir);
         let json = serde_json::to_string_pretty(self)?;
-        std::fs::write(&path, json + "\n").with_context(|| format!("write {}", path.display()))
+        std::fs::write(&path, json + "\n").with_context(|| format!("write {}", path.display()))?;
+        // The file can hold API tokens and passwords: keep it private to the user.
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+                .with_context(|| format!("chmod {}", path.display()))?;
+        }
+        Ok(())
     }
 
     pub fn enabled_servers(&self) -> impl Iterator<Item = (&String, &McpServerEntry)> {

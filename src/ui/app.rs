@@ -10,6 +10,8 @@ pub fn install(settings: &Settings) -> Result<()> {
     let app = locate_app_bundle()?;
     let dest = PathBuf::from("/Applications/Piya.app");
 
+    remove_running_instance(&settings.data_dir);
+
     if dest.exists() {
         std::fs::remove_dir_all(&dest).context("remove old Piya.app")?;
     }
@@ -17,13 +19,18 @@ pub fn install(settings: &Settings) -> Result<()> {
     copy_dir_recursive(&app, &dest)?;
     let config_path = crate::config::write_app_support_config(settings)?;
     install_login_item(settings, &dest)?;
-    remove_running_instance(&settings.data_dir);
 
-    Command::new("open")
-        .arg("-a")
-        .arg(&dest)
-        .status()
-        .context("launch Piya")?;
+    // `install_login_item` registers a LaunchAgent with `RunAtLoad = true`, which
+    // already starts the app on `launchctl bootstrap`. Only call `open -a` as a fallback
+    // if no instance came up.
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    if !is_installed_app_running() {
+        Command::new("open")
+            .arg("-a")
+            .arg(&dest)
+            .status()
+            .context("launch Piya")?;
+    }
 
     println!("Installed Piya to /Applications/Piya.app");
     println!("Config: {}", config_path.display());
@@ -45,8 +52,12 @@ pub fn uninstall(_settings: &Settings) -> Result<()> {
 fn locate_app_bundle() -> Result<PathBuf> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let candidates = [
+        PathBuf::from("dist/build.noindex/PiyaSwift.app"),
+        root.join("dist/build.noindex/PiyaSwift.app"),
         PathBuf::from("dist/PiyaSwift.app"),
         root.join("dist/PiyaSwift.app"),
+        PathBuf::from("dist/build.noindex/Piya.app"),
+        root.join("dist/build.noindex/Piya.app"),
         PathBuf::from("dist/Piya.app"),
         root.join("dist/Piya.app"),
     ];
@@ -120,6 +131,17 @@ fn remove_running_instance(data_dir: &Path) {
         }
         let _ = std::fs::remove_file(lock);
     }
+    let _ = Command::new("pkill")
+        .args(["-f", "/Applications/Piya.app/Contents/MacOS/"])
+        .status();
+}
+
+fn is_installed_app_running() -> bool {
+    Command::new("pgrep")
+        .args(["-f", "/Applications/Piya.app/Contents/MacOS/"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<()> {

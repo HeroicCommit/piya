@@ -33,7 +33,8 @@ swift build -c release \
   -Xlinker -rpath -Xlinker @executable_path/../Frameworks
 
 BIN="$ROOT/macos/PiyaApp/.build/release/Piya"
-APP="$ROOT/dist/PiyaSwift.app"
+STAGE="$ROOT/dist/build.noindex"
+APP="$STAGE/PiyaSwift.app"
 ICON_SRC="$ROOT/assets/AppIcon.png"
 
 echo "==> Packaging $APP …"
@@ -44,6 +45,7 @@ if [[ ! -f "$CLI" ]]; then
   exit 1
 fi
 
+# `.noindex` suffix guarantees Spotlight / Raycast skips staged build bundles.
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Helpers" "$APP/Contents/Frameworks" "$APP/Contents/Resources"
 
 cp "$BIN" "$APP/Contents/MacOS/Piya"
@@ -62,7 +64,7 @@ fi
 
 if [[ -f "$ICON_SRC" ]]; then
   cp "$ICON_SRC" "$APP/Contents/Resources/AppIcon.png"
-  ICONSET="$ROOT/dist/PiyaSwift.iconset"
+  ICONSET="$STAGE/PiyaSwift.iconset"
   rm -rf "$ICONSET"
   mkdir -p "$ICONSET"
   for size in 16 32 128 256 512; do
@@ -97,10 +99,12 @@ cat > "$APP/Contents/Info.plist" <<EOF
 EOF
 
 codesign --force --deep --sign - "$APP" 2>/dev/null || true
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$APP" 2>/dev/null || true
 
 echo ""
-echo "Built: $APP"
-echo "Run:   open \"$APP\""
+echo "Built:   $APP"
+echo "Install: ./target/release/piya app --install"
+echo "Run:     open \"$APP\""
 echo ""
 echo "Menu bar → Ask Piya"
 echo "Shortcut (when Piya is focused): ⌃⌘Space"
