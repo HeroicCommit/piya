@@ -133,6 +133,12 @@ enum PiyaBackend {
         try piyaSaveMcpServers(servers: servers)
     }
 
+    /// Start the server, run the MCP handshake and list its tools (blocking, up to ~15s).
+    static func testMcpServer(_ server: FfiMcpServer) -> FfiMcpProbe {
+        bootstrap()
+        return piyaTestMcpServer(server: server)
+    }
+
     static var version: String {
         bootstrap()
         return piyaVersion()

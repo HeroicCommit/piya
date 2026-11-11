@@ -394,6 +394,11 @@ RustBuffer uniffi_piya_fn_func_piya_send(RustBuffer message, RustBuffer mode, Ru
 void uniffi_piya_fn_func_piya_send_notification(RustBuffer title, RustBuffer body, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_TEST_MCP_SERVER
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_TEST_MCP_SERVER
+RustBuffer uniffi_piya_fn_func_piya_test_mcp_server(RustBuffer server, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_UPDATE_TASK
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_UPDATE_TASK
 void uniffi_piya_fn_func_piya_update_task(RustBuffer id, RustBuffer title, RustBuffer description, RustCallStatus *_Nonnull out_status
@@ -844,6 +849,12 @@ uint16_t uniffi_piya_checksum_func_piya_send(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_SEND_NOTIFICATION
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_SEND_NOTIFICATION
 uint16_t uniffi_piya_checksum_func_piya_send_notification(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_TEST_MCP_SERVER
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_TEST_MCP_SERVER
+uint16_t uniffi_piya_checksum_func_piya_test_mcp_server(void
     
 );
 #endif

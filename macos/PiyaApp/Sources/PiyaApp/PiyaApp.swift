@@ -19,6 +19,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+/// Opens Settings and brings it to the front.
+///
+/// Piya runs as an accessory (menu-bar) app, so `SettingsLink` alone opens the window
+/// behind the frontmost application. Activate the app first, open the scene, then
+/// raise the window once SwiftUI has created it.
+private struct SettingsMenuButton: View {
+    @Environment(\.openSettings) private var openSettings
+
+    var body: some View {
+        Button("Settings…") {
+            NSApp.activate(ignoringOtherApps: true)
+            openSettings()
+            // The window is created asynchronously; raise it right away and again
+            // shortly after in case it appeared late.
+            DispatchQueue.main.async { Self.raiseSettingsWindow() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { Self.raiseSettingsWindow() }
+        }
+        .keyboardShortcut(",")
+    }
+
+    private static func raiseSettingsWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        // Settings is an ordinary titled window. Skip the Hummingbird chat window (so
+        // we never pop it open) and anything hidden.
+        let candidates = NSApp.windows.filter {
+            $0.styleMask.contains(.titled)
+                && !($0 is HummingbirdWindow)
+                && !($0 is NSPanel)
+                && $0.canBecomeKey
+                && $0.isVisible
+        }
+        for window in candidates {
+            window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
+        }
+    }
+}
+
 @main
 struct PiyaApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -30,9 +68,7 @@ struct PiyaApp: App {
             }
             .keyboardShortcut(" ", modifiers: [.control, .command])
 
-            SettingsLink {
-                Text("Settings")
-            }
+            SettingsMenuButton()
 
             Divider()
 

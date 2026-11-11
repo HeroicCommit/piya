@@ -90,6 +90,18 @@ struct StdioMcpSession {
 
 impl StdioMcpSession {
     fn spawn(server_name: &str, command: &str, args: &[String], env: &HashMap<String, String>) -> Result<Self> {
+        Self::spawn_tracked(server_name, command, args, env, None)
+    }
+
+    /// Like [`Self::spawn`], publishing the child pid so a caller can kill a server
+    /// that hangs during the handshake.
+    fn spawn_tracked(
+        server_name: &str,
+        command: &str,
+        args: &[String],
+        env: &HashMap<String, String>,
+        pid_slot: Option<std::sync::Arc<std::sync::atomic::AtomicU32>>,
+    ) -> Result<Self> {
         let mut cmd = Command::new(command);
         cmd.args(args);
         cmd.stdin(Stdio::piped());
@@ -102,6 +114,9 @@ impl StdioMcpSession {
         let mut child = cmd
             .spawn()
             .with_context(|| format!("spawn MCP server `{server_name}`"))?;
+        if let Some(slot) = &pid_slot {
+            slot.store(child.id(), std::sync::atomic::Ordering::SeqCst);
+        }
 
         let stdin = child
             .stdin
@@ -416,6 +431,51 @@ fn parse_tool_list(result: Value) -> Result<Vec<McpTool>> {
         .collect())
 }
 
+/// Start one server, run the MCP handshake and list its tools, then shut it down.
+/// Used by Settings → "Test connection". Returns `(tool name, description)` pairs.
+///
+/// A server that hangs is killed after `timeout`.
+pub fn probe_server(
+    server_name: &str,
+    entry: &McpServerEntry,
+    timeout: Duration,
+) -> Result<Vec<(String, String)>> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use std::sync::{mpsc, Arc};
+
+    let transport = entry.resolve_transport()?;
+    let pid_slot = Arc::new(AtomicU32::new(0));
+    let (tx, rx) = mpsc::channel();
+    let name = server_name.to_string();
+    let slot = pid_slot.clone();
+    std::thread::spawn(move || {
+        let result = (|| -> Result<Vec<(String, String)>> {
+            let tools = match transport {
+                McpTransport::Stdio { command, args, env } => {
+                    let mut s = StdioMcpSession::spawn_tracked(&name, &command, &args, &env, Some(slot))?;
+                    s.list_tools()?
+                }
+                McpTransport::Http { url, headers } => {
+                    HttpMcpSession::connect(&name, &url, &headers)?.list_tools()?
+                }
+            };
+            Ok(tools.into_iter().map(|t| (t.name, t.description)).collect())
+        })();
+        let _ = tx.send(result);
+    });
+
+    match rx.recv_timeout(timeout) {
+        Ok(result) => result,
+        Err(_) => {
+            let pid = pid_slot.load(Ordering::SeqCst);
+            if pid != 0 {
+                let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+            }
+            Err(anyhow!("timed out after {}s waiting for `{server_name}`", timeout.as_secs()))
+        }
+    }
+}
+
 /// Connected MCP servers and their tools, ready for LLM function calling.
 pub struct McpToolHub {
     sessions: Vec<ActiveSession>,
@@ -722,5 +782,52 @@ mod tests {
             .openai_tools()
             .iter()
             .any(|t| t.function.name.contains("talk_send_message")));
+    }
+
+    #[test]
+    fn probe_lists_tools_from_a_stdio_server() {
+        let script = r#"read l; echo '{"jsonrpc":"2.0","id":1,"result":{}}'; read l; read l; echo '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"hello","description":"says hi"}]}}'"#;
+        let entry = McpServerEntry {
+            command: "sh".into(),
+            args: vec!["-c".into(), script.into()],
+            env: HashMap::new(),
+            enabled: true,
+            transport: Some("stdio".into()),
+            url: None,
+            headers: HashMap::new(),
+        };
+        let tools = probe_server("fake", &entry, Duration::from_secs(10)).unwrap();
+        assert_eq!(tools, vec![("hello".to_string(), "says hi".to_string())]);
+    }
+
+    #[test]
+    fn probe_kills_a_hanging_server() {
+        let entry = McpServerEntry {
+            command: "sh".into(),
+            args: vec!["-c".into(), "sleep 30".into()],
+            env: HashMap::new(),
+            enabled: true,
+            transport: Some("stdio".into()),
+            url: None,
+            headers: HashMap::new(),
+        };
+        let started = std::time::Instant::now();
+        let err = probe_server("hang", &entry, Duration::from_secs(2)).unwrap_err();
+        assert!(err.to_string().contains("timed out"), "{err}");
+        assert!(started.elapsed() < Duration::from_secs(8));
+    }
+
+    #[test]
+    fn probe_rejects_incomplete_entries() {
+        let entry = McpServerEntry {
+            command: String::new(),
+            args: vec![],
+            env: HashMap::new(),
+            enabled: true,
+            transport: Some("stdio".into()),
+            url: None,
+            headers: HashMap::new(),
+        };
+        assert!(probe_server("empty", &entry, Duration::from_secs(2)).is_err());
     }
 }
