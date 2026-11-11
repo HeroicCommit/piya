@@ -219,6 +219,15 @@ async fn run_async(cli: Cli, settings: Settings) -> Result<()> {
             ui::run_menu(settings).await
         }
         Some(Commands::Run { continuous, once }) => {
+            // Several workers claim tasks in parallel (PIYA_WORKERS, default 3).
+            if (continuous || (!once && !cli.json)) && settings.workers > 1 {
+                let workers = settings.workers;
+                return tokio::task::spawn_blocking(move || {
+                    piya::agent::pool::run_pool(settings, workers, interactive, continuous)
+                })
+                .await?;
+            }
+            piya::cpu_monitor::start("worker");
             let mut agent = AgentLoop::new(settings, true)?.with_interactive(interactive);
             if continuous {
                 agent.run_continuous().await?;

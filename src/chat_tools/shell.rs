@@ -102,6 +102,7 @@ mod tests {
             max_cycles: 0,
             min_accuracy: 0.7,
             max_retries: 3,
+            workers: 1,
         };
         let args = json!({ "command": "pwd", "host": "local" });
         let out = dispatch(&settings, &args.to_string()).unwrap();

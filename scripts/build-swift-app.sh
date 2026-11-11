@@ -27,10 +27,28 @@ cp "$ROOT/macos/PiyaApp/Generated/piyaFFI.modulemap" "$ROOT/macos/PiyaApp/Genera
 
 echo "==> Building SwiftUI app…"
 cd "$ROOT/macos/PiyaApp"
-swift build -c release \
-  -Xlinker -L -Xlinker "$ROOT/target/release" \
-  -Xlinker -lpiya \
-  -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+swift_build() {
+  swift build -c release \
+    -Xlinker -L -Xlinker "$ROOT/target/release" \
+    -Xlinker -lpiya \
+    -Xlinker -rpath -Xlinker @executable_path/../Frameworks
+}
+if ! swift_build; then
+  # Some Command Line Tools releases ship an SDK newer than their Swift compiler
+  # and fail on SwiftUI property wrappers (@State). Retry once with the newest
+  # older SDK. Override with SDKROOT=/path/to/MacOSX*.sdk.
+  if [[ -z "${SDKROOT:-}" ]]; then
+    FALLBACK_SDK="$(ls -d /Library/Developer/CommandLineTools/SDKs/MacOSX[0-9]*.[0-9]*.sdk 2>/dev/null | sort -V | tail -2 | head -1 || true)"
+    if [[ -n "$FALLBACK_SDK" ]]; then
+      echo "==> Swift build failed; retrying with SDK $FALLBACK_SDK"
+      SDKROOT="$FALLBACK_SDK" swift_build
+    else
+      exit 1
+    fi
+  else
+    exit 1
+  fi
+fi
 
 BIN="$ROOT/macos/PiyaApp/.build/release/Piya"
 STAGE="$ROOT/dist/build.noindex"

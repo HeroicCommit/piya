@@ -646,7 +646,16 @@ fn shell_policy_from_env() -> Option<PermissionOutcome> {
         .to_lowercase()
         .as_str()
     {
-        "allow" | "auto" | "1" | "true" => Some(PermissionOutcome::Allow),
+        "allow" | "auto" | "1" | "true" => {
+            static WARNED: std::sync::Once = std::sync::Once::new();
+            WARNED.call_once(|| {
+                eprintln!(
+                    "piya: WARNING: PIYA_SHELL_POLICY=allow auto-approves every shell command \
+                     (no prompts). Use only in a sandbox."
+                );
+            });
+            Some(PermissionOutcome::Allow)
+        }
         "deny" | "block" | "0" | "false" => Some(PermissionOutcome::Deny {
             reason: "blocked by PIYA_SHELL_POLICY=deny".into(),
         }),

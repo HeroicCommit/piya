@@ -31,6 +31,7 @@ pub struct AgentLoop {
     executor: Option<Executor>,
     reviewer: Option<Reviewer>,
     interactive: bool,
+    worker_id: String,
 }
 
 impl AgentLoop {
@@ -46,11 +47,18 @@ impl AgentLoop {
             executor: None,
             reviewer: None,
             interactive: false,
+            worker_id: crate::tasks::default_worker_id().to_string(),
         };
         if require_llm {
             agent.ensure_llm()?;
         }
         Ok(agent)
+    }
+
+    /// Give this loop its own worker identity (used when several run in one process).
+    pub fn with_worker_id(mut self, worker_id: impl Into<String>) -> Self {
+        self.worker_id = worker_id.into();
+        self
     }
 
     pub fn with_interactive(mut self, interactive: bool) -> Self {
@@ -98,11 +106,26 @@ impl AgentLoop {
 
     pub async fn run_once(&mut self) -> Result<Option<CycleResult>> {
         self.ensure_llm()?;
-        let Some(task) = self.tasks.next_pending()? else {
+        let worker_id = self.worker_id.clone();
+        let Some(task) = self.tasks.claim_next(&worker_id)? else {
             info!("No pending tasks. Add one with: piya add \"title\" \"description\"");
             return Ok(None);
         };
-        Ok(Some(self.run_task_cycle(task).await?))
+        // Keep the claim alive while the (possibly long) task runs.
+        let _heartbeat = HeartbeatGuard::start(self.tasks.clone(), task.id.clone(), worker_id);
+        let task_id = task.id.clone();
+        match self.run_task_cycle(task).await {
+            Ok(result) => Ok(Some(result)),
+            Err(err) => {
+                // Don't leave the task stuck `in_progress`: schedule a retry or fail it.
+                let _ = self.tasks.release_after_error(
+                    &task_id,
+                    &format!("{err:#}"),
+                    self.settings.max_retries,
+                );
+                Err(err)
+            }
+        }
     }
 
     pub async fn run_continuous(&mut self) -> Result<()> {
@@ -113,7 +136,16 @@ impl AgentLoop {
         let mut cycles = 0u64;
 
         loop {
-            if let Some(result) = self.run_once().await? {
+            let outcome = match self.run_once().await {
+                Ok(outcome) => outcome,
+                Err(err) => {
+                    // A failed task attempt must not take the whole worker down.
+                    tracing::error!("task attempt failed: {err:#}");
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    continue;
+                }
+            };
+            if let Some(result) = outcome {
                 cycles += 1;
                 self.print_cycle_summary(&result);
                 if self.settings.max_cycles > 0 && cycles >= self.settings.max_cycles {
@@ -581,5 +613,48 @@ impl AgentLoop {
     pub fn memory_mut(&mut self) -> Result<&mut VectorMemory> {
         self.ensure_llm()?;
         Ok(self.memory.as_mut().expect("memory"))
+    }
+}
+
+/// Periodically refreshes a task's heartbeat so other workers do not reclaim it.
+/// Runs on a dedicated OS thread, so a worker blocked in a long synchronous shell
+/// command still heartbeats. Stops when dropped.
+struct HeartbeatGuard {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl HeartbeatGuard {
+    fn start(queue: TaskQueue, task_id: String, worker_id: String) -> Self {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let flag = stop.clone();
+        std::thread::Builder::new()
+            .name("piya-heartbeat".into())
+            .spawn(move || {
+                let interval = std::time::Duration::from_secs(crate::tasks::HEARTBEAT_INTERVAL_SECS);
+                let step = std::time::Duration::from_millis(250);
+                'outer: loop {
+                    let mut waited = std::time::Duration::ZERO;
+                    while waited < interval {
+                        if flag.load(Ordering::Relaxed) {
+                            break 'outer;
+                        }
+                        std::thread::sleep(step);
+                        waited += step;
+                    }
+                    // Lost ownership (cancelled/reclaimed) or db error: stop quietly.
+                    if !matches!(queue.heartbeat(&task_id, &worker_id), Ok(true)) {
+                        break;
+                    }
+                }
+            })
+            .ok();
+        Self { stop }
+    }
+}
+
+impl Drop for HeartbeatGuard {
+    fn drop(&mut self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
