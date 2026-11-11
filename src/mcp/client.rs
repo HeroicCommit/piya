@@ -809,6 +809,8 @@ mod tests {
             "took {:?}; request loop is spinning",
             started.elapsed()
         );
+    }
+
     #[test]
     fn probe_lists_tools_from_a_stdio_server() {
         let script = r#"read l; echo '{"jsonrpc":"2.0","id":1,"result":{}}'; read l; read l; echo '{"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"hello","description":"says hi"}]}}'"#;
