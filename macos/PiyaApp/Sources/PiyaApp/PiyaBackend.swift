@@ -211,6 +211,16 @@ enum PiyaBackend {
         bootstrap()
         try piyaDeleteMemory(id: id)
     }
+
+    static func checkForUpdate() throws -> FfiUpdateCheck {
+        bootstrap()
+        return try piyaCheckForUpdate()
+    }
+
+    static func installUpdateAndRelaunch() throws -> String {
+        bootstrap()
+        return try piyaInstallUpdateAndRelaunch()
+    }
 }
 
 struct ChatMessage: Identifiable, Equatable {

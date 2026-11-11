@@ -12,7 +12,7 @@ use piya::tasks::TaskStatus;
 use piya::ui;
 
 #[derive(Parser)]
-#[command(name = "piya", about = "Continuous AI agent with vector memory and OPPAR loop")]
+#[command(name = "piya", version, about = "Continuous AI agent with vector memory and OPPAR loop")]
 struct Cli {
     /// Emit JSON (for MCP / OpenClaw integrations)
     #[arg(long, global = true)]
@@ -37,6 +37,12 @@ enum Commands {
         /// Install Piya.app to /Applications + login item
         #[arg(long)]
         install: bool,
+        /// Atomically update /Applications/Piya.app in place from local build (keeps config & login item)
+        #[arg(long)]
+        update: bool,
+        /// Proceed even if background tasks are currently running
+        #[arg(long)]
+        force: bool,
         /// Remove Piya.app and login item
         #[arg(long)]
         uninstall: bool,
@@ -92,6 +98,18 @@ enum Commands {
     Status,
     /// Compact vector memory files and prune old versions
     Optimize,
+    /// Check for or install Piya updates in place (without reinstalling)
+    Update {
+        /// Only check if a newer release is available on GitHub
+        #[arg(long)]
+        check: bool,
+        /// Update /Applications/Piya.app from the local staged build instead of GitHub Releases
+        #[arg(long)]
+        local: bool,
+        /// Proceed even if up-to-date or if background tasks are running
+        #[arg(long)]
+        force: bool,
+    },
     /// Search vector memory
     Recall {
         query: String,
@@ -136,7 +154,7 @@ fn is_sync_command(cli: &Cli) -> bool {
         #[cfg(target_os = "macos")]
         Some(Commands::Mcp) => true,
         Some(Commands::Watch) => true,
-        Some(Commands::App { .. }) | Some(Commands::Badge { .. }) => true,
+        Some(Commands::App { .. }) | Some(Commands::Badge { .. }) | Some(Commands::Update { .. }) => true,
         None => {
             #[cfg(target_os = "macos")]
             {
@@ -170,14 +188,65 @@ fn run_sync(cli: &Cli, settings: Settings) -> Result<()> {
             "Legacy wry MCP settings are disabled. Rebuild with `--features legacy-ui` or use PiyaSwift.app."
         ),
         Some(Commands::Watch) => ui::watch::run(settings),
-        Some(Commands::App { install, uninstall }) => {
+        Some(Commands::App {
+            install,
+            update,
+            force,
+            uninstall,
+        }) => {
             if uninstall {
                 ui::app::uninstall(&settings)
+            } else if update {
+                ui::app::update_from_local(&settings, force)
             } else if install {
                 ui::app::install(&settings)
             } else {
                 ui::badge::run(settings)
             }
+        }
+        Some(Commands::Update {
+            check,
+            local,
+            force,
+        }) => {
+            if local {
+                return ui::app::update_from_local(&settings, force);
+            }
+            let info = piya::updater::check_for_update()?;
+            if check {
+                if cli.json {
+                    print_json(&info)?;
+                } else if info.update_available {
+                    println!(
+                        "Update available: {} -> {} ({})",
+                        info.current_version, info.latest_version, info.release_url
+                    );
+                } else {
+                    println!("Piya is up to date ({}).", info.current_version);
+                }
+                return Ok(());
+            }
+            if !info.update_available && !force {
+                if cli.json {
+                    print_json(&info)?;
+                } else {
+                    println!("Piya is already up to date ({}).", info.current_version);
+                }
+                return Ok(());
+            }
+            println!(
+                "Downloading Piya v{} and verifying integrity…",
+                info.latest_version
+            );
+            let dest = std::path::PathBuf::from(piya::updater::INSTALLED_APP_PATH);
+            let staged = piya::updater::download_and_stage_release(&info, &dest)?;
+            piya::updater::apply_staged_update_cli(&settings, &staged, &dest, force)?;
+            println!(
+                "Updated {} to v{} (config, data, and login item untouched).",
+                dest.display(),
+                info.latest_version
+            );
+            Ok(())
         }
         Some(Commands::Badge { install, uninstall }) => {
             if uninstall {

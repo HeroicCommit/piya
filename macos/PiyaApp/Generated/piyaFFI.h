@@ -285,6 +285,12 @@ void uniffi_piya_fn_func_piya_cancel_task(RustBuffer id, RustCallStatus *_Nonnul
 RustBuffer uniffi_piya_fn_func_piya_chat(RustBuffer message, RustBuffer history, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_CHECK_FOR_UPDATE
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_CHECK_FOR_UPDATE
+RustBuffer uniffi_piya_fn_func_piya_check_for_update(RustCallStatus *_Nonnull out_status
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_CREATE_CHAT_SESSION
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_CREATE_CHAT_SESSION
 RustBuffer uniffi_piya_fn_func_piya_create_chat_session(RustBuffer mode, RustCallStatus *_Nonnull out_status
@@ -315,6 +321,12 @@ RustBuffer uniffi_piya_fn_func_piya_get_app_env_settings(RustCallStatus *_Nonnul
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_GET_USER_PREFS
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_GET_USER_PREFS
 RustBuffer uniffi_piya_fn_func_piya_get_user_prefs(RustCallStatus *_Nonnull out_status
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_INSTALL_UPDATE_AND_RELAUNCH
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_INSTALL_UPDATE_AND_RELAUNCH
+RustBuffer uniffi_piya_fn_func_piya_install_update_and_relaunch(RustCallStatus *_Nonnull out_status
     
 );
 #endif
@@ -732,6 +744,12 @@ uint16_t uniffi_piya_checksum_func_piya_chat(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_CHECK_FOR_UPDATE
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_CHECK_FOR_UPDATE
+uint16_t uniffi_piya_checksum_func_piya_check_for_update(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_CREATE_CHAT_SESSION
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_CREATE_CHAT_SESSION
 uint16_t uniffi_piya_checksum_func_piya_create_chat_session(void
@@ -765,6 +783,12 @@ uint16_t uniffi_piya_checksum_func_piya_get_app_env_settings(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_GET_USER_PREFS
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_GET_USER_PREFS
 uint16_t uniffi_piya_checksum_func_piya_get_user_prefs(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_INSTALL_UPDATE_AND_RELAUNCH
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_INSTALL_UPDATE_AND_RELAUNCH
+uint16_t uniffi_piya_checksum_func_piya_install_update_and_relaunch(void
     
 );
 #endif

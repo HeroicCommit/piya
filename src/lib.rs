@@ -23,6 +23,7 @@ pub mod schedule;
 pub mod shell;
 pub mod tasks;
 pub mod ui;
+pub mod updater;
 pub mod worker;
 
 uniffi::setup_scaffolding!("piya");

@@ -58,14 +58,21 @@ cargo run -- run --once       # one task
 cargo run -- run --continuous # daemon (polls every 30s)
 ```
 
-### SwiftUI app (Littlebird-style — new)
+### SwiftUI app (Menu bar + Hummingbird)
 
 Native menu bar + **Hummingbird** floating panel (SwiftUI + Rust via UniFFI):
 
 ```bash
-./scripts/build-swift-app.sh
-open dist/PiyaSwift.app
+./scripts/build-swift-app.sh           # stages dist/build.noindex/PiyaSwift.app (leaves /Applications untouched)
+./target/release/piya app --install    # first-time install to /Applications/Piya.app + login item
 ```
+
+#### Updating & Releases (no reinstall needed)
+
+- **In-app self-update:** **Menu bar → Check for Updates…** (or **Settings → General → Check for Updates**) downloads the latest GitHub Release, verifies its SHA-256 checksum & code signature, waits for active tasks to finish, atomically swaps `/Applications/Piya.app` in place, and relaunches — keeping `.env`, `data/`, `workspace/`, and Login Item untouched.
+- **CLI self-update:** `piya update` (or `piya update --check`, or `piya update --local` to promote a local staged build in place).
+- **Side-by-side dev preview:** `./scripts/build-swift-app.sh --dev` builds `dist/build.noindex/PiyaDev.app` (`com.piya.swiftui.dev`) so you can test changes without stopping `/Applications/Piya.app`.
+- **Publish a new release:** `./scripts/release.sh 0.2.1` (or push tag `v0.2.1` to trigger `.github/workflows/release.yml`) packages `Piya-macos-arm64.zip` + `SHA256SUMS` and creates a GitHub Release without modifying your installed app.
 
 See [macos/README.md](macos/README.md). The legacy `tao/wry` app (`build-macos-app.sh`) still works during migration.
 
