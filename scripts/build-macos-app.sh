@@ -7,9 +7,10 @@ cd "$ROOT"
 echo "Building release binary (legacy wry UI)…"
 cargo build --release --features legacy-ui
 
-APP="$ROOT/dist/Piya.app"
+STAGE="$ROOT/dist/build.noindex"
+APP="$STAGE/Piya.app"
 ICON_SRC="$ROOT/assets/AppIcon.png"
-ICONSET="$ROOT/dist/Piya.iconset"
+ICONSET="$STAGE/Piya.iconset"
 
 rm -rf "$ROOT/dist"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$ROOT/assets"
@@ -40,7 +41,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
   <key>CFBundleDevelopmentRegion</key><string>en</string>
   <key>CFBundleExecutable</key><string>piya</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
-  <key>CFBundleIdentifier</key><string>com.piya.app</string>
+  <key>CFBundleIdentifier</key><string>com.piya.desktop</string>
   <key>CFBundleName</key><string>Piya</string>
   <key>CFBundleDisplayName</key><string>Piya</string>
   <key>CFBundlePackageType</key><string>APPL</string>
@@ -56,6 +57,7 @@ EOF
 echo ""
 echo "Signing app (ad-hoc — required for Notification Center)…"
 codesign --force --deep --sign - "$APP"
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$APP" 2>/dev/null || true
 
 echo ""
 echo "Built: $APP"

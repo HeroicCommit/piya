@@ -815,6 +815,87 @@ public func FfiConverterTypeFfiChatTurn_lower(_ value: FfiChatTurn) -> RustBuffe
 }
 
 
+/**
+ * Result of Settings → "Test connection" (never throws; errors are in `error`).
+ */
+public struct FfiMcpProbe {
+    public var ok: Bool
+    public var tools: [FfiMcpToolInfo]
+    public var error: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(ok: Bool, tools: [FfiMcpToolInfo], error: String) {
+        self.ok = ok
+        self.tools = tools
+        self.error = error
+    }
+}
+
+#if compiler(>=6)
+extension FfiMcpProbe: Sendable {}
+#endif
+
+
+extension FfiMcpProbe: Equatable, Hashable {
+    public static func ==(lhs: FfiMcpProbe, rhs: FfiMcpProbe) -> Bool {
+        if lhs.ok != rhs.ok {
+            return false
+        }
+        if lhs.tools != rhs.tools {
+            return false
+        }
+        if lhs.error != rhs.error {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(ok)
+        hasher.combine(tools)
+        hasher.combine(error)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiMcpProbe: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiMcpProbe {
+        return
+            try FfiMcpProbe(
+                ok: FfiConverterBool.read(from: &buf), 
+                tools: FfiConverterSequenceTypeFfiMcpToolInfo.read(from: &buf), 
+                error: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiMcpProbe, into buf: inout [UInt8]) {
+        FfiConverterBool.write(value.ok, into: &buf)
+        FfiConverterSequenceTypeFfiMcpToolInfo.write(value.tools, into: &buf)
+        FfiConverterString.write(value.error, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiMcpProbe_lift(_ buf: RustBuffer) throws -> FfiMcpProbe {
+    return try FfiConverterTypeFfiMcpProbe.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiMcpProbe_lower(_ value: FfiMcpProbe) -> RustBuffer {
+    return FfiConverterTypeFfiMcpProbe.lower(value)
+}
+
+
 public struct FfiMcpServer {
     public var name: String
     public var command: String
@@ -936,6 +1017,76 @@ public func FfiConverterTypeFfiMcpServer_lift(_ buf: RustBuffer) throws -> FfiMc
 #endif
 public func FfiConverterTypeFfiMcpServer_lower(_ value: FfiMcpServer) -> RustBuffer {
     return FfiConverterTypeFfiMcpServer.lower(value)
+}
+
+
+public struct FfiMcpToolInfo {
+    public var name: String
+    public var description: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(name: String, description: String) {
+        self.name = name
+        self.description = description
+    }
+}
+
+#if compiler(>=6)
+extension FfiMcpToolInfo: Sendable {}
+#endif
+
+
+extension FfiMcpToolInfo: Equatable, Hashable {
+    public static func ==(lhs: FfiMcpToolInfo, rhs: FfiMcpToolInfo) -> Bool {
+        if lhs.name != rhs.name {
+            return false
+        }
+        if lhs.description != rhs.description {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(name)
+        hasher.combine(description)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiMcpToolInfo: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiMcpToolInfo {
+        return
+            try FfiMcpToolInfo(
+                name: FfiConverterString.read(from: &buf), 
+                description: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiMcpToolInfo, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterString.write(value.description, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiMcpToolInfo_lift(_ buf: RustBuffer) throws -> FfiMcpToolInfo {
+    return try FfiConverterTypeFfiMcpToolInfo.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiMcpToolInfo_lower(_ value: FfiMcpToolInfo) -> RustBuffer {
+    return FfiConverterTypeFfiMcpToolInfo.lower(value)
 }
 
 
@@ -1633,6 +1784,31 @@ fileprivate struct FfiConverterSequenceTypeFfiMcpServer: FfiConverterRustBuffer 
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeFfiMcpToolInfo: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiMcpToolInfo]
+
+    public static func write(_ value: [FfiMcpToolInfo], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiMcpToolInfo.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiMcpToolInfo] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiMcpToolInfo]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiMcpToolInfo.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeFfiMemoryEntry: FfiConverterRustBuffer {
     typealias SwiftType = [FfiMemoryEntry]
 
@@ -1884,6 +2060,16 @@ public func piyaSendNotification(title: String, body: String)throws   {try rustC
     )
 }
 }
+/**
+ * Start the server, run the MCP handshake and list its tools (15s limit).
+ */
+public func piyaTestMcpServer(server: FfiMcpServer) -> FfiMcpProbe  {
+    return try!  FfiConverterTypeFfiMcpProbe_lift(try! rustCall() {
+    uniffi_piya_fn_func_piya_test_mcp_server(
+        FfiConverterTypeFfiMcpServer_lower(server),$0
+    )
+})
+}
 public func piyaUpdateTask(id: String, title: String, description: String)throws   {try rustCallWithError(FfiConverterTypePiyaError_lift) {
     uniffi_piya_fn_func_piya_update_task(
         FfiConverterString.lower(id),
@@ -1996,6 +2182,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_piya_checksum_func_piya_send_notification() != 49358) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_piya_checksum_func_piya_test_mcp_server() != 14401) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_piya_checksum_func_piya_update_task() != 34660) {
