@@ -108,10 +108,20 @@ pub fn save_last_notified(raw: &str) {
     let _ = std::fs::write(last_notified_path(), raw);
 }
 
+/// `pgrep -f` pattern for the SwiftUI menu-bar app (installed, staged or dev build).
+const GUI_PROCESS_PATTERN: &str = "/Contents/MacOS/Piya";
+
 /// The SwiftUI menu-bar app (or its dev build) is running and will draw major alerts.
+///
+/// macOS `pgrep` skips its own ancestors unless given `-a`. The app (clicking "Test major
+/// alert") and workers it spawned are descendants of the app, so without `-a` it was never
+/// found and every major alert also opened the fallback system alert.
 fn gui_running() -> bool {
-    std::process::Command::new("pgrep")
-        .args(["-f", r"\.app/Contents/MacOS/Piya"])
+    if std::env::current_exe().is_ok_and(|p| p.to_string_lossy().contains(GUI_PROCESS_PATTERN)) {
+        return true;
+    }
+    std::process::Command::new("/usr/bin/pgrep")
+        .args(["-a", "-f", GUI_PROCESS_PATTERN])
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .status()
@@ -177,4 +187,25 @@ fn badge_daemon_running() -> bool {
         }
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GUI_PROCESS_PATTERN;
+
+    #[test]
+    fn gui_pattern_is_plain_and_matches_app_paths() {
+        assert!(
+            !GUI_PROCESS_PATTERN.contains('\\'),
+            "no regex escapes: pgrep would look for a literal backslash"
+        );
+        for path in [
+            "/Applications/Piya.app/Contents/MacOS/Piya",
+            "/Users/x/Projects/Piya/dist/build.noindex/PiyaDev.app/Contents/MacOS/Piya",
+        ] {
+            assert!(path.contains(GUI_PROCESS_PATTERN), "{path}");
+        }
+        assert!(!"/Applications/Piya.app/Contents/Helpers/piya run --continuous"
+            .contains(GUI_PROCESS_PATTERN));
+    }
 }
