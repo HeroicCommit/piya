@@ -4,6 +4,7 @@ import PiyaBindings
 
 enum SettingsTab: Hashable {
     case general
+    case models
     case you
     case memory
     case notifications

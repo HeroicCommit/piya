@@ -5,10 +5,10 @@ use async_openai::types::{ChatCompletionTool, ChatCompletionToolType, FunctionOb
 use serde_json::{json, Value};
 
 use crate::config::Settings;
-use crate::tasks::TaskQueue;
-use crate::ui::assign::{queue_from_brief, recall_from_chat, remember_from_chat, spawn_if_needed};
+use crate::tasks::{NewTask, TaskKind, TaskQueue};
 
 use super::admin;
+use super::schedule as schedule_tools;
 use super::shell as shell_tools;
 
 pub fn is_builtin_tool(name: &str) -> bool {
@@ -16,6 +16,7 @@ pub fn is_builtin_tool(name: &str) -> bool {
         || name.starts_with("piya_task_")
         || name.starts_with("piya_memory_")
         || name.starts_with("piya_run_")
+        || name.starts_with("piya_schedule_")
         || name == "piya_notify"
 }
 
@@ -23,34 +24,42 @@ pub fn openai_tools() -> Vec<ChatCompletionTool> {
     let mut tools = admin::openai_tools();
     tools.extend(shell_tools::openai_tools());
     tools.extend(notify_tools());
+    tools.extend(schedule_tools::openai_tools());
     tools.extend(task_tools());
     tools.extend(memory_tools());
     tools
 }
 
+/// Tools for a scheduled `action` run: same as chat, minus queueing new background work.
+pub fn background_tools() -> Vec<ChatCompletionTool> {
+    openai_tools()
+        .into_iter()
+        .filter(|t| t.function.name != "piya_task_queue")
+        .collect()
+}
+
 pub fn system_hint() -> &'static str {
-    "Built-in tools (use these — do NOT tell the user to switch modes):\n\
-     • `piya_notify` — send a macOS Notification Center banner from the Piya app \
-       (use this for test notifications and alerts — NEVER use osascript display notification)\n\
-     • `piya_run_command` — Mac or sticky SSH host. Use host=\"aapanel\" (or ssh aapanel '…'). \
-       After remote is sticky, follow-up commands stay remote unless host=\"local\". \
-       Never interactive bare ssh. Do NOT use osascript for notifications.\n\
-     • `piya_task_queue` — queue NEW research, reports, scheduled/recurring work (starts worker when due now). \
-       Do NOT use this for questions, status checks, or “why didn’t X happen” — use `piya_task_status` instead\n\
-     • `piya_task_status` — list running, queued, and recent tasks with descriptions and results \
-       (always use this when the user asks about tasks, queue, recent work, or why something failed — do NOT say you lack access; do NOT re-queue)\n\
-     • `piya_memory_remember` — save a durable fact (one complete note; keep Instance IDs / specs intact)\n\
-     • `piya_memory_recall` — search vector memory (use for 'what are my server details' etc.)\n\
-     • `piya_mcp_list`, `piya_mcp_upsert`, `piya_mcp_remove` — manage MCP servers\n\
-     For local Mac tasks, always try `piya_run_command` first. \
-     For notifications/alerts, always use `piya_notify`. \
-     Use MCP tools for Nextcloud, wiki, and other connected services. \
-     When the user asks you to do NEW work, call `piya_task_queue` with a clear brief. \
-     When they ask why a task/notification failed or what happened, call `piya_task_status` and explain — never create another identical task. \
-     When you run a shell command, briefly tell the user the exact command (e.g. ran `mdfind …`). \
-     If the user declines a permission prompt, acknowledge that and suggest an alternative. \
-     Never invent results or use [Insert …] placeholders — only cite tool output. \
-     Confirm actions briefly."
+    "How to route requests (critical):\n\
+     • Answer questions, facts, explanations, opinions and small talk DIRECTLY in chat. \
+       Do not create files or tasks for them.\n\
+     • Reminders, timers, alarms, 'ping/notify me at…', and anything recurring ('every day at 6…') → \
+       `piya_schedule_create` (kind=reminder for a message, kind=action when work must run at that time). \
+       NEVER write scripts, cron jobs, `sleep` commands or 'reminder systems' for these.\n\
+     • 'Send me a (test) notification' right now → `piya_notify`. If they want it on screen / major / \
+       impossible to miss, or it is urgent, set major=true (also on piya_schedule_create).\n\
+     • Remove/cancel/stop/delete a reminder or task → `piya_schedule_list` to find the id, then `piya_task_cancel`. \
+       Change a time → `piya_schedule_update`. If it isn't listed, say it doesn't exist.\n\
+     • Quick Mac or server actions (find a file, check disk, read a log) → `piya_run_command` yourself, now.\n\
+     • Only substantial multi-step work (research reports, writing documents, multi-file changes) → \
+       `piya_task_queue` with a clear `done_when`. ONE task per request: research + writing + checking for the \
+       same goal go in a single task's brief; never split one request into several tasks.\n\
+     • Questions about tasks, results or why something happened → `piya_task_status` / `piya_schedule_list`. \
+       Never queue a task to answer a question.\n\
+     Verification: only say something is scheduled/cancelled/done when a tool result says so \
+     (e.g. 'Saved ✔', 'Cancelled ✔'), and quote the time it reports. If a tool fails, say what failed. \
+     When you run a shell command, tell the user the exact command. If the user declines a permission prompt, \
+     acknowledge that and suggest an alternative. Never invent results or use [Insert …] placeholders. \
+     Confirm actions in one short sentence."
 }
 
 pub fn dispatch_builtin_tool(settings: &Settings, name: &str, args_json: &str) -> Result<String> {
@@ -66,6 +75,10 @@ pub fn dispatch_builtin_tool(settings: &Settings, name: &str, args_json: &str) -
     } else {
         serde_json::from_str(args_json).context("parse tool arguments")?
     };
+
+    if schedule_tools::is_schedule_tool(name) {
+        return schedule_tools::dispatch(settings, name, &args);
+    }
 
     match name {
         "piya_task_queue" => queue_task(settings, &args),
@@ -93,6 +106,11 @@ fn notify_tools() -> Vec<ChatCompletionTool> {
                 "body": {
                     "type": "string",
                     "description": "Notification message body"
+                },
+                "major": {
+                    "type": "boolean",
+                    "description": "true = major alert: a panel in the middle of the screen that stays until the user dismisses it. \
+                                    Use when the user asks for an on-screen/major/big/can't-miss alert, or for something urgent. Default false (normal banner)."
                 }
             },
             "required": ["body"]
@@ -114,35 +132,44 @@ fn send_notify(args: &Value) -> Result<String> {
     if body.is_empty() {
         return Err(anyhow!("`body` cannot be empty"));
     }
+    if args.get("major").and_then(|v| v.as_bool()).unwrap_or(false) {
+        crate::notify::major_alert(title, body);
+        return Ok(format!("Major alert shown on screen ✔ {title} — {body} (stays until dismissed)"));
+    }
     crate::notify::user_alert(title, body);
-    Ok(format!("Notification sent: {title} — {body}"))
+    Ok(format!("Notification sent ✔ {title} — {body}"))
 }
 
 fn task_tools() -> Vec<ChatCompletionTool> {
     vec![
         tool(
             "piya_task_queue",
-            "Queue a NEW task for Piya's background agent (research, write files to workspace/, \
-             one-off or scheduled/recurring jobs). Use ONLY when the user asks you to do new work. \
-             Do NOT use for questions about past tasks, status, results, or missing notifications — \
-             use piya_task_status instead.",
+            "Start a background task for SUBSTANTIAL multi-step work only: research reports, \
+             writing a document, multi-file changes. Not for questions, quick lookups, \
+             notifications, reminders or timers (use piya_schedule_create / piya_notify / answer directly). \
+             Call it ONCE per user request: put every step of the same goal (research, write, verify) \
+             in one brief. Starts immediately.",
             json!({
                 "type": "object",
                 "properties": {
+                    "title": { "type": "string", "description": "Short title" },
                     "brief": {
                         "type": "string",
-                        "description": "Full task description including schedule if any (e.g. 'every day at 6am send stats')"
+                        "description": "Complete description of the work, with all details the user gave"
+                    },
+                    "done_when": {
+                        "type": "string",
+                        "description": "Checkable completion condition, e.g. 'workspace/okr_overview.md exists with sections X, Y, Z and cited sources'"
                     }
                 },
-                "required": ["brief"]
+                "required": ["title", "brief", "done_when"]
             }),
         ),
         tool(
             "piya_task_status",
             "List Piya tasks: running, queued, and recently completed/failed with full descriptions \
-             and result summaries. Always call this when the user asks about tasks, the queue, \
-             recent work, task outcomes, notifications, or why something did/didn't happen — \
-             never say you lack workspace access, and never queue a duplicate task to answer.",
+             and result summaries. Call this when the user asks about tasks, results, \
+             or why something did/didn't happen — never queue a task to answer.",
             json!({
                 "type": "object",
                 "properties": {},
@@ -183,19 +210,37 @@ fn memory_tools() -> Vec<ChatCompletionTool> {
 }
 
 fn queue_task(settings: &Settings, args: &Value) -> Result<String> {
-    let brief = args
-        .get("brief")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("`brief` is required"))?
-        .trim();
-    if brief.is_empty() {
-        return Err(anyhow!("`brief` cannot be empty"));
-    }
+    let get = |k: &str| {
+        args.get(k)
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    };
+    let brief = get("brief").ok_or_else(|| anyhow!("`brief` is required"))?;
+    let title: String = get("title")
+        .unwrap_or(brief)
+        .chars()
+        .take(80)
+        .collect();
+    let done_when = get("done_when");
 
     let queue = TaskQueue::new(settings.data_dir.join("piya.db"))?;
-    let outcome = queue_from_brief(&queue, brief)?;
-    spawn_if_needed(settings, &outcome);
-    Ok(outcome.reply)
+    let mut new = NewTask::new(&title, brief, TaskKind::Task);
+    new.done_when = done_when;
+    let task = queue.insert(&new)?;
+    if let Err(err) = crate::worker::spawn_worker(settings, &["run", "--continuous"]) {
+        return Ok(format!(
+            "Queued task `{}` \"{}\", but the worker could not start: {err:#}",
+            task.short_id(),
+            task.title
+        ));
+    }
+    Ok(format!(
+        "Queued ✔ task `{}` \"{}\" — running in the background. Done when: {}",
+        task.short_id(),
+        task.title,
+        task.done_when.as_deref().unwrap_or("(not set)")
+    ))
 }
 
 fn task_status(settings: &Settings) -> Result<String> {
@@ -215,7 +260,8 @@ fn remember(settings: &Settings, args: &Value) -> Result<String> {
     if text.is_empty() {
         return Err(anyhow!("`text` cannot be empty"));
     }
-    Ok(remember_from_chat(settings, &format!("remember that {text}")).reply)
+    crate::ui::assign::store_memory(settings, text)?;
+    Ok(format!("Saved to memory ✔ {text}"))
 }
 
 fn recall(settings: &Settings, args: &Value) -> Result<String> {
@@ -227,10 +273,10 @@ fn recall(settings: &Settings, args: &Value) -> Result<String> {
     if query.is_empty() {
         return Err(anyhow!("`query` cannot be empty"));
     }
-    Ok(recall_from_chat(settings, &format!("recall {query}")).reply)
+    crate::ui::assign::search_memory(settings, query)
 }
 
-fn tool(name: &str, description: &str, parameters: Value) -> ChatCompletionTool {
+pub(crate) fn tool(name: &str, description: &str, parameters: Value) -> ChatCompletionTool {
     ChatCompletionTool {
         r#type: ChatCompletionToolType::Function,
         function: FunctionObject {

@@ -241,26 +241,21 @@ pub fn piya_send(
     history: Vec<FfiChatTurn>,
 ) -> Result<String, PiyaError> {
     let settings = load_settings()?;
+    let turns: Vec<ChatTurn> = history
+        .into_iter()
+        .map(|t| ChatTurn {
+            role: t.role,
+            text: t.text,
+        })
+        .collect();
     match mode {
         FfiChatMode::Chat => {
-            let turns: Vec<ChatTurn> = history
-                .into_iter()
-                .map(|t| ChatTurn {
-                    role: t.role,
-                    text: t.text,
-                })
-                .collect();
             chat_service::chat_reply(&settings, &turns, &message).map_err(|err| PiyaError::Chat {
                 message: format!("{err:#}"),
             })
         }
         FfiChatMode::Task => {
-            let queue = TaskQueue::new(settings.data_dir.join("piya.db")).map_err(|err| {
-                PiyaError::Chat {
-                    message: format!("{err:#}"),
-                }
-            })?;
-            let outcome = converse_task(&queue, &settings, &message);
+            let outcome = converse_task(&settings, &turns, &message);
             spawn_if_needed(&settings, &outcome);
             Ok(outcome.reply)
         }
@@ -622,9 +617,6 @@ pub fn piya_save_user_prefs(prefs: FfiUserPrefs) -> Result<(), PiyaError> {
 
 #[derive(uniffi::Record, Clone, Debug)]
 pub struct FfiAppEnvSettings {
-    pub openai_api_key: String,
-    pub openai_base_url: String,
-    pub model: String,
     pub notify: String,
     pub shell_policy: String,
 }
@@ -634,9 +626,6 @@ pub fn piya_get_app_env_settings() -> Result<FfiAppEnvSettings, PiyaError> {
     let _ = load_settings()?;
     let env = config::AppEnvSettings::load_from_env();
     Ok(FfiAppEnvSettings {
-        openai_api_key: env.openai_api_key,
-        openai_base_url: env.openai_base_url,
-        model: env.model,
         notify: env.notify,
         shell_policy: env.shell_policy,
     })
@@ -645,15 +634,187 @@ pub fn piya_get_app_env_settings() -> Result<FfiAppEnvSettings, PiyaError> {
 #[uniffi::export]
 pub fn piya_save_app_env_settings(env: FfiAppEnvSettings) -> Result<(), PiyaError> {
     let payload = config::AppEnvSettings {
-        openai_api_key: env.openai_api_key,
-        openai_base_url: env.openai_base_url,
-        model: env.model,
         notify: env.notify,
         shell_policy: env.shell_policy,
     };
     payload.save_to_app_support().map_err(map_err)?;
-    crate::chat_engine::invalidate_llm();
     Ok(())
+}
+
+// ----- Models ---------------------------------------------------------------
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiProvider {
+    pub id: String,
+    pub label: String,
+    pub default_base_url: String,
+    pub needs_key: bool,
+    pub local: bool,
+    pub key_url: String,
+    pub supports_embeddings: bool,
+    pub default_embedding_model: String,
+    pub suggested_model: String,
+    /// Key already saved for this provider (so switching back needs no re-paste).
+    pub saved_key: String,
+    pub saved_base_url: String,
+}
+
+#[uniffi::export]
+pub fn piya_list_providers() -> Vec<FfiProvider> {
+    let _ = load_settings();
+    crate::providers::PROVIDERS
+        .iter()
+        .map(|p| FfiProvider {
+            id: p.id.into(),
+            label: p.label.into(),
+            default_base_url: p.default_base_url.into(),
+            needs_key: p.needs_key,
+            local: p.local,
+            key_url: p.key_url.into(),
+            supports_embeddings: p.embeddings,
+            default_embedding_model: p.default_embedding_model.into(),
+            suggested_model: p.suggested_model.into(),
+            saved_key: crate::providers::saved_key(p.id),
+            saved_base_url: crate::providers::saved_base_url(p.id),
+        })
+        .collect()
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiModelSettings {
+    pub provider: String,
+    pub api_key: String,
+    pub base_url: String,
+    pub model: String,
+    /// `none` turns memory search off.
+    pub embed_provider: String,
+    pub embed_api_key: String,
+    pub embed_base_url: String,
+    pub embedding_model: String,
+}
+
+#[uniffi::export]
+pub fn piya_get_model_settings() -> Result<FfiModelSettings, PiyaError> {
+    let _ = load_settings()?;
+    let m = config::ModelSettings::load_from_env();
+    Ok(FfiModelSettings {
+        provider: m.provider,
+        api_key: m.api_key,
+        base_url: m.base_url,
+        model: m.model,
+        embed_provider: m.embed_provider,
+        embed_api_key: m.embed_api_key,
+        embed_base_url: m.embed_base_url,
+        embedding_model: m.embedding_model,
+    })
+}
+
+#[uniffi::export]
+pub fn piya_save_model_settings(settings: FfiModelSettings) -> Result<(), PiyaError> {
+    let _ = load_settings()?;
+    let m = config::ModelSettings {
+        provider: settings.provider,
+        api_key: settings.api_key,
+        base_url: settings.base_url,
+        model: settings.model,
+        embed_provider: settings.embed_provider,
+        embed_api_key: settings.embed_api_key,
+        embed_base_url: settings.embed_base_url,
+        embedding_model: settings.embedding_model,
+    };
+    m.save_to_app_support().map_err(map_err)?;
+    crate::chat_engine::invalidate_llm();
+    // A running worker still holds the old model; it restarts on the next task.
+    restart_idle_worker();
+    Ok(())
+}
+
+/// Stop a worker that has nothing in progress so the next task starts one with the new model.
+fn restart_idle_worker() {
+    let Ok(settings) = load_settings() else { return };
+    let Ok(queue) = TaskQueue::new(settings.data_dir.join("piya.db")) else { return };
+    if queue.count(Some(crate::tasks::TaskStatus::InProgress)).unwrap_or(1) > 0 {
+        return;
+    }
+    let lock = crate::worker::worker_lock_path(&settings.data_dir);
+    if let Ok(pid) = std::fs::read_to_string(&lock) {
+        if let Ok(pid) = pid.trim().parse::<i32>() {
+            let _ = std::process::Command::new("kill").args(["-9", &pid.to_string()]).status();
+        }
+        let _ = std::fs::remove_file(&lock);
+    }
+    if queue.count_scheduled().unwrap_or(0) > 0 || queue.count_due_pending().unwrap_or(0) > 0 {
+        let _ = crate::worker::spawn_worker(&settings, &["run", "--continuous"]);
+    }
+}
+
+/// Live model ids from the provider account. `embeddings` lists embedding models only.
+#[uniffi::export]
+pub fn piya_list_models(
+    provider: String,
+    api_key: String,
+    base_url: String,
+    embeddings: bool,
+) -> Result<Vec<String>, PiyaError> {
+    let conn = crate::providers::Connection { provider, api_key, base_url };
+    crate::runtime::block_on(async move { crate::providers::list_models(&conn, embeddings).await })
+        .map_err(map_err)
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiModelProbe {
+    pub ok: bool,
+    pub message: String,
+}
+
+/// Send one tiny request with the given connection + model (chat or embeddings).
+#[uniffi::export]
+pub fn piya_test_model(
+    provider: String,
+    api_key: String,
+    base_url: String,
+    model: String,
+    embeddings: bool,
+) -> FfiModelProbe {
+    let result = (|| -> anyhow::Result<String> {
+        let mut settings = load_settings().map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        if embeddings {
+            settings.embed_provider = provider;
+            settings.embed_api_key = api_key;
+            settings.embed_base_url = base_url;
+            settings.embedding_model = model;
+        } else {
+            settings.provider = provider;
+            settings.api_key = api_key;
+            settings.base_url = base_url;
+            settings.model = model;
+        }
+        let llm = crate::llm::LlmClient::new(&settings)?;
+        crate::runtime::block_on(async move {
+            if embeddings {
+                if llm.embedding_id().is_none() {
+                    anyhow::bail!("choose a provider and embeddings model first");
+                }
+                let v = llm.embed(&["ping".to_string()]).await?;
+                let n = v.first().map(|e| e.len()).unwrap_or(0);
+                Ok(format!("Embeddings work ({n} dimensions)."))
+            } else {
+                let reply = llm.chat("Reply with exactly: OK", "ping", false).await?;
+                let reply: String = reply.trim().chars().take(40).collect();
+                Ok(format!("Connected to {} — replied \"{reply}\".", llm.describe()))
+            }
+        })
+    })();
+    match result {
+        Ok(message) => FfiModelProbe { ok: true, message },
+        Err(err) => FfiModelProbe { ok: false, message: format!("{err:#}") },
+    }
+}
+
+/// Warning when a pasted key looks like another provider's (empty when fine/unknown).
+#[uniffi::export]
+pub fn piya_key_warning(provider: String, api_key: String) -> String {
+    crate::providers::key_mismatch_warning(&provider, &api_key).unwrap_or_default()
 }
 
 #[derive(uniffi::Record, Clone, Debug)]
@@ -724,4 +885,30 @@ pub fn piya_check_for_update() -> Result<FfiUpdateCheck, PiyaError> {
 #[uniffi::export]
 pub fn piya_install_update_and_relaunch() -> Result<String, PiyaError> {
     crate::updater::prepare_gui_self_update().map_err(map_err)
+}
+
+// ----- Major alerts -----------------------------------------------------------
+
+/// "Snooze" on a major alert: show it again (as a major alert) in `minutes`.
+#[uniffi::export]
+pub fn piya_snooze_alert(title: String, body: String, minutes: u32) -> Result<String, PiyaError> {
+    let settings = load_settings()?;
+    let queue = TaskQueue::new(settings.data_dir.join("piya.db")).map_err(map_err)?;
+    let args = serde_json::json!({
+        "kind": "reminder",
+        "title": title,
+        "message": if body.trim().is_empty() { title.clone() } else { body },
+        "in_minutes": minutes.max(1),
+        "major": true,
+    });
+    let out = crate::chat_tools::schedule::create(&queue, &args, chrono::Utc::now()).map_err(map_err)?;
+    let _ = crate::worker::spawn_worker(&settings, &["run", "--continuous"]);
+    Ok(out)
+}
+
+/// Settings → Notifications → "Test major alert".
+#[uniffi::export]
+pub fn piya_test_major_alert() {
+    let _ = load_settings();
+    crate::notify::major_alert("Test major alert", "This stays on screen until you dismiss it.");
 }

@@ -28,9 +28,11 @@ pub fn worker_running(data_dir: &Path) -> bool {
 }
 
 pub fn spawn_worker(settings: &Settings, args: &[&str]) -> Result<()> {
-    if settings.openai_api_key.is_empty() {
-        anyhow::bail!("OPENAI_API_KEY is missing — add it to ~/Library/Application Support/Piya/.env");
+    // Evals and tests queue rows without starting a real background worker.
+    if std::env::var_os("PIYA_NO_WORKER_SPAWN").is_some() {
+        return Ok(());
     }
+    settings.require_model()?;
     if worker_running(&settings.data_dir) {
         return Ok(());
     }
@@ -54,10 +56,7 @@ pub fn spawn_worker(settings: &Settings, args: &[&str]) -> Result<()> {
         .env("PIYA_DATA_DIR", &settings.data_dir)
         .env("PIYA_WORKSPACE", &settings.workspace)
         .env("PIYA_NOTIFY", "all")
-        .env("OPENAI_API_KEY", &settings.openai_api_key)
-        .env("OPENAI_BASE_URL", &settings.openai_base_url)
-        .env("PIYA_MODEL", &settings.model)
-        .env("PIYA_EMBEDDING_MODEL", &settings.embedding_model)
+        .envs(settings.model_env())
         .env("PIYA_BIN", &exe);
 
     #[cfg(unix)]

@@ -85,9 +85,13 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("piya-pool-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let settings = Settings {
-            openai_api_key: "test-key".into(),
-            openai_base_url: "http://127.0.0.1:9/v1".into(),
+            provider: "openai".into(),
+            api_key: "test-key".into(),
+            base_url: "http://127.0.0.1:9/v1".into(),
             model: "m".into(),
+            embed_provider: "none".into(),
+            embed_api_key: String::new(),
+            embed_base_url: String::new(),
             embedding_model: "e".into(),
             workspace: dir.join("ws"),
             data_dir: dir.clone(),
@@ -99,10 +103,16 @@ mod tests {
         };
         settings.ensure_dirs().unwrap();
         let queue = TaskQueue::new(dir.join("piya.db")).unwrap();
-        // Reminder tasks complete without calling the LLM.
+        // Reminder rows complete without calling the LLM.
         for i in 0..12 {
+            let title = format!("Reminder {i}");
+            let body = format!("About item {i}");
             queue
-                .add(&format!("Remind me {i}"), &format!("Remind me about item {i}"), 0, "")
+                .insert(&crate::tasks::NewTask::new(
+                    &title,
+                    &body,
+                    crate::tasks::TaskKind::Reminder,
+                ))
                 .unwrap();
         }
         run_pool(settings, 3, false, false).unwrap();

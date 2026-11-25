@@ -10,15 +10,15 @@ use crate::agent::reviewer::Reviewer;
 use crate::config::Settings;
 use crate::llm::LlmClient;
 use crate::memory::{MemoryKind, VectorMemory};
-use crate::tasks::{Task, TaskQueue, TaskStatus};
+use crate::tasks::{Task, TaskKind, TaskQueue, TaskStatus};
 
 pub struct CycleResult {
     pub task: Task,
     pub accuracy: f64,
     pub passed: bool,
     pub attempts: i32,
-    /// When set, deliver this as a reminder banner instead of a task-finished notice.
-    pub reminder_body: Option<String>,
+    /// When set, deliver this `(title, body)` as a banner instead of a task-finished notice.
+    pub alert: Option<(String, String)>,
 }
 
 pub struct AgentLoop {
@@ -168,8 +168,10 @@ impl AgentLoop {
     }
 
     async fn run_task_cycle(&mut self, task: Task) -> Result<CycleResult> {
-        if crate::reminder::is_reminder_task(&task) {
-            return self.complete_reminder(task);
+        match task.kind {
+            TaskKind::Reminder => return self.complete_reminder(task),
+            TaskKind::Action => return self.run_action(task).await,
+            TaskKind::Task => {}
         }
 
         self.tasks
@@ -207,13 +209,20 @@ impl AgentLoop {
 
             plan = if attempt == 1 {
                 planner
-                    .plan(&task.title, &task.description, &memory_context, &domains)
+                    .plan(
+                        &task.title,
+                        &task.description,
+                        task.done_when.as_deref(),
+                        &memory_context,
+                        &domains,
+                    )
                     .await?
             } else {
                 planner
                     .replan(
                         &task.title,
                         &task.description,
+                        task.done_when.as_deref(),
                         &memory_context,
                         &review,
                         &plan,
@@ -264,7 +273,14 @@ impl AgentLoop {
             };
 
             execution = executor
-                .execute(&task.title, &plan, &research_context, &memory_context, &domains)
+                .execute(
+                    &task.title,
+                    task.done_when.as_deref(),
+                    &plan,
+                    &research_context,
+                    &memory_context,
+                    &domains,
+                )
                 .await?;
             let act_log = serde_json::to_string_pretty(&execution)?;
             self.tasks.log_cycle(
@@ -284,7 +300,14 @@ impl AgentLoop {
             );
 
             review = reviewer
-                .review(&task.title, &plan, &execution, &research_context, &domains)
+                .review(
+                    &task.title,
+                    task.done_when.as_deref(),
+                    &plan,
+                    &execution,
+                    &research_context,
+                    &domains,
+                )
                 .await?;
             let accuracy = review.get("accuracy").and_then(|v| v.as_f64()).unwrap_or(0.0);
             let passed = review.get("passed").and_then(|v| v.as_bool()).unwrap_or(false);
@@ -356,18 +379,20 @@ impl AgentLoop {
         }
 
         let accuracy = review.get("accuracy").and_then(|v| v.as_f64()).unwrap_or(0.0);
-        let passed =
-            accuracy >= self.settings.min_accuracy || review.get("passed").and_then(|v| v.as_bool()).unwrap_or(false);
+        // The evidence gate forces passed=false; it must win over a high score.
+        let gated = review.get("evidence_gate").is_some();
+        let passed = !gated
+            && (accuracy >= self.settings.min_accuracy
+                || review.get("passed").and_then(|v| v.as_bool()).unwrap_or(false));
 
         let (status, result_text) = if passed {
-            (
-                TaskStatus::Done,
-                execution
-                    .get("summary")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("Completed")
-                    .to_string(),
-            )
+            let text = execution
+                .get("answer")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| execution.get("summary").and_then(|v| v.as_str()))
+                .unwrap_or("Completed");
+            (TaskStatus::Done, text.to_string())
         } else if attempts >= self.settings.max_retries as i32 {
             (
                 TaskStatus::Failed,
@@ -398,13 +423,17 @@ impl AgentLoop {
             accuracy,
             passed,
             attempts,
-            reminder_body: None,
+            alert: None,
         })
     }
 
     /// Deliver a timed reminder as a Notification Center banner — no LLM cycle.
     fn complete_reminder(&mut self, task: Task) -> Result<CycleResult> {
-        let body = crate::reminder::reminder_body(&task);
+        let body = if task.description.trim().is_empty() {
+            task.title.clone()
+        } else {
+            task.description.trim().to_string()
+        };
         self.tasks
             .update_status(&task.id, TaskStatus::InProgress, None, None)?;
         let attempts = self.tasks.increment_attempts(&task.id)?;
@@ -423,11 +452,44 @@ impl AgentLoop {
         }
 
         Ok(CycleResult {
+            alert: Some((updated.title.clone(), body)),
             task: updated,
             accuracy: 1.0,
             passed: true,
             attempts,
-            reminder_body: Some(body),
+        })
+    }
+
+    /// Run a scheduled action: one short tool-using agent turn with the saved instruction.
+    async fn run_action(&mut self, task: Task) -> Result<CycleResult> {
+        self.tasks
+            .update_status(&task.id, TaskStatus::InProgress, None, None)?;
+        let attempts = self.tasks.increment_attempts(&task.id)?;
+        self.phase("⏰", "ACTION", &task.title);
+
+        let outcome = crate::chat_service::run_scheduled_action(&self.settings, &task).await?;
+        let text = if outcome.text.is_empty() {
+            "Done.".to_string()
+        } else {
+            outcome.text.clone()
+        };
+        self.tasks.log_cycle(&task.id, "action", Some(&task.description), Some(&text), None)?;
+        let updated = self
+            .tasks
+            .update_status(&task.id, TaskStatus::Done, Some(&text), Some(1.0))?;
+        if updated.recurrence.is_some() {
+            let _ = self.tasks.reschedule_if_recurring(&task.id)?;
+        }
+        let alert = (!outcome.notified).then(|| {
+            let body: String = text.chars().take(280).collect();
+            (updated.title.clone(), body)
+        });
+        Ok(CycleResult {
+            task: updated,
+            accuracy: 1.0,
+            passed: true,
+            attempts,
+            alert,
         })
     }
 
@@ -522,8 +584,16 @@ impl AgentLoop {
     }
 
     pub fn print_cycle_summary(&self, result: &CycleResult) {
-        if let Some(body) = &result.reminder_body {
-            crate::notify::user_alert("Piya", body);
+        if result.task.kind != TaskKind::Task {
+            let Some((title, body)) = &result.alert else {
+                info!("Action finished (already notified) — task={}", result.task.title);
+                return;
+            };
+            if crate::chat_tools::schedule::is_major(&result.task) {
+                crate::notify::major_alert(title, body);
+            } else {
+                crate::notify::user_alert(title, body);
+            }
             if self.interactive {
                 crate::ui::term::box_result(
                     "Reminder sent",

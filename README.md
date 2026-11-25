@@ -24,7 +24,77 @@ flowchart LR
 | **Review** | Self-critique against success criteria; score 0–1 accuracy |
 | **Remember** | Store learnings, corrections, and outcomes with embeddings |
 
+### Models
+
+**Settings → Models** picks one provider + model for everything (chat, tasks, scheduled actions):
+
+| Provider | Connection |
+|----------|------------|
+| OpenAI | API key |
+| Anthropic (Claude) | API key — native Messages API |
+| Google Gemini | AI Studio key |
+| OpenRouter, Groq, Mistral, DeepSeek, xAI | API key |
+| Ollama, LM Studio | Local server, no key |
+| Other OpenAI-compatible server | Address + optional key |
+
+The model list comes live from your account (**Refresh models**), and **Test** sends one tiny request. Keys are saved
+per provider (`PIYA_KEY_<PROVIDER>` in `~/Library/Application Support/Piya/.env`, mode 600), so switching back does not
+need a re-paste. A key that looks like another provider's (e.g. `sk-ant-…` under OpenAI) is flagged before saving.
+Models that reject `temperature` or JSON mode are detected and retried without them.
+
+**Memory (embeddings)** has its own setting, because many chat providers (Claude, Groq, …) have no embeddings API:
+OpenAI, Gemini, Mistral, Ollama, LM Studio or any compatible server, or Off. Changing it re-indexes saved memories
+automatically; a `memory-backup-*.jsonl` is written to the data folder first.
+
+CLI / `.env` equivalents: `PIYA_PROVIDER`, `PIYA_MODEL`, `PIYA_KEY_<PROVIDER>`, `PIYA_BASE_URL_<PROVIDER>`,
+`PIYA_EMBED_PROVIDER`, `PIYA_EMBEDDING_MODEL`. Existing installs with only `OPENAI_API_KEY` keep working as OpenAI.
+
+### Notifications
+
+Normal notifications are Notification Center banners. **Major alerts** open a panel in the middle of the screen that
+floats above full-screen apps on every Space and stays until you click **Done** or **Snooze** (5 min – 1 h). Piya uses
+them when you ask for it ("make sure it pops up on my screen") or for urgent items — `piya_notify` / `piya_schedule_create`
+take `major: true`. They show even in Quiet mode; only Off hides them. Without the menu-bar app running, a system alert
+is used instead. Try it from **Settings → Notifications → Test major alert**.
+
 Memories are retrieved with **accuracy-weighted cosine similarity** — high-quality past work surfaces first.
+
+### What goes where
+
+Chat is the front door. The model routes each message with real tools (no keyword matching):
+
+| Request | Handled by | LLM loop? |
+|---------|-----------|-----------|
+| Questions, facts, small talk | Answered directly in chat | No |
+| "Remind me…", "set a timer…", "every weekday at 6:30…" | `piya_schedule_create` → `reminder` row → banner at the time | No |
+| "Every day at 8, check X and tell me" | `piya_schedule_create` → `action` row → one short tool-using turn at the time | Short turn |
+| "Remove/cancel/move that reminder" | `piya_schedule_list` → `piya_task_cancel` / `piya_schedule_update` | No |
+| "Send me a notification" | `piya_notify` | No |
+| Substantial multi-step work (reports, documents, code) | `piya_task_queue` with a `done_when` → OPPAR loop | Yes |
+
+Every chat turn sees the live task ledger (ids, kinds, next runs) and the current local time, so follow-ups like
+"actually cancel that" resolve to real ids. Tool results say `Saved ✔` / `Cancelled ✔` from a database read-back;
+the model is told to claim only what a tool confirmed.
+
+In the OPPAR loop, the reviewer judges **tool evidence**, not the executor's summary. A task with no successful
+tool output, or whose `done_when` is not met, cannot pass.
+
+### Evals
+
+```bash
+piya eval            # 14 basic errands against the real model, in a throwaway data dir
+piya eval -n 3       # each case 3 times
+piya eval -f cancel  # only cases whose name contains "cancel"
+```
+
+Each case asserts on **state** (task ledger rows, run times, notifications, workspace files), never on wording.
+
+### Cleanup after upgrading
+
+```bash
+piya cleanup --dry-run   # show legacy reminder tasks + agent memories that taught the old behaviour
+piya cleanup             # cancel / delete them (memories you saved yourself are never touched)
+```
 
 ## Quick start
 
@@ -33,7 +103,7 @@ git clone https://github.com/HeroicCommit/piya.git
 cd piya
 
 cp .env.example .env
-# Set OPENAI_API_KEY in .env
+# Set OPENAI_API_KEY in .env (or pick another provider in Settings → Models)
 
 cargo build --release
 # binary: target/release/piya

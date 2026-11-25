@@ -24,16 +24,19 @@ impl Executor {
     pub async fn execute(
         &self,
         task_title: &str,
+        done_when: Option<&str>,
         plan: &Value,
         research_context: &str,
         memory_context: &str,
         domains: &[Domain],
     ) -> Result<Value> {
         let user = format!(
-            "{}\n\nTask: {task_title}\n\nPlan:\n{plan}\n\nResearch:\n{research_context}\n\n\
-             {memory_context}\n\nWorkspace: {}\nExecute the plan now. Prefer running an existing \
-             script over rewriting it. Use tools, read their output, then finish with JSON.",
+            "{}\n\nTask: {task_title}\nCompletion condition (done_when): {}\n\nPlan:\n{plan}\n\n\
+             Research:\n{research_context}\n\n{memory_context}\n\nWorkspace: {}\n\
+             Execute the plan now. Prefer running an existing script over rewriting it. \
+             Use tools, read their output, verify the completion condition with a tool, then finish with JSON.",
             expertise::format_domain_context(domains),
+            done_when.unwrap_or("(see plan success_criteria)"),
             self.workspace.display(),
             plan = serde_json::to_string_pretty(plan)?
         );

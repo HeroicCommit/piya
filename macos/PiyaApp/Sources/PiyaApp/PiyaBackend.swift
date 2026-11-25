@@ -183,23 +183,53 @@ enum PiyaBackend {
         return try piyaGetAppEnvSettings()
     }
 
-    static func saveAppEnvSettings(
-        apiKey: String,
-        baseUrl: String,
-        model: String,
-        notify: String,
-        shellPolicy: String
-    ) throws {
+    static func saveAppEnvSettings(notify: String, shellPolicy: String) throws {
         bootstrap()
-        try piyaSaveAppEnvSettings(
-            env: FfiAppEnvSettings(
-                openaiApiKey: apiKey,
-                openaiBaseUrl: baseUrl,
-                model: model,
-                notify: notify,
-                shellPolicy: shellPolicy
-            )
-        )
+        try piyaSaveAppEnvSettings(env: FfiAppEnvSettings(notify: notify, shellPolicy: shellPolicy))
+    }
+
+    // MARK: Major alerts
+
+    static func snoozeAlert(title: String, body: String, minutes: UInt32) throws -> String {
+        bootstrap()
+        return try piyaSnoozeAlert(title: title, body: body, minutes: minutes)
+    }
+
+    static func testMajorAlert() {
+        bootstrap()
+        piyaTestMajorAlert()
+    }
+
+    // MARK: Models
+
+    static func providers() -> [FfiProvider] {
+        bootstrap()
+        return piyaListProviders()
+    }
+
+    static func modelSettings() throws -> FfiModelSettings {
+        bootstrap()
+        return try piyaGetModelSettings()
+    }
+
+    static func saveModelSettings(_ settings: FfiModelSettings) throws {
+        bootstrap()
+        try piyaSaveModelSettings(settings: settings)
+    }
+
+    static func listModels(provider: String, apiKey: String, baseUrl: String, embeddings: Bool) throws -> [String] {
+        bootstrap()
+        return try piyaListModels(provider: provider, apiKey: apiKey, baseUrl: baseUrl, embeddings: embeddings)
+    }
+
+    static func testModel(provider: String, apiKey: String, baseUrl: String, model: String, embeddings: Bool) -> FfiModelProbe {
+        bootstrap()
+        return piyaTestModel(provider: provider, apiKey: apiKey, baseUrl: baseUrl, model: model, embeddings: embeddings)
+    }
+
+    static func keyWarning(provider: String, apiKey: String) -> String {
+        bootstrap()
+        return piyaKeyWarning(provider: provider, apiKey: apiKey)
     }
 
     static func listMemories(limit: UInt32) throws -> [FfiMemoryEntry] {

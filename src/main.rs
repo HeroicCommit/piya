@@ -110,6 +110,21 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Run basic-errand evals against the real model (throwaway data dir; asserts on state)
+    Eval {
+        /// Only run cases whose name contains this text
+        #[arg(long, short = 'f')]
+        filter: Option<String>,
+        /// Run each case N times
+        #[arg(long, short = 'n', default_value_t = 1)]
+        repeat: usize,
+    },
+    /// Cancel legacy keyword-routed reminder tasks and purge agent memories that taught them
+    Cleanup {
+        /// Show what would change without changing anything
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Search vector memory
     Recall {
         query: String,
@@ -155,6 +170,7 @@ fn is_sync_command(cli: &Cli) -> bool {
         Some(Commands::Mcp) => true,
         Some(Commands::Watch) => true,
         Some(Commands::App { .. }) | Some(Commands::Badge { .. }) | Some(Commands::Update { .. }) => true,
+        Some(Commands::Eval { .. }) => true,
         None => {
             #[cfg(target_os = "macos")]
             {
@@ -188,6 +204,13 @@ fn run_sync(cli: &Cli, settings: Settings) -> Result<()> {
             "Legacy wry MCP settings are disabled. Rebuild with `--features legacy-ui` or use PiyaSwift.app."
         ),
         Some(Commands::Watch) => ui::watch::run(settings),
+        Some(Commands::Eval { ref filter, repeat }) => {
+            let failures = piya::evals::run(&settings, filter.as_deref(), repeat)?;
+            if failures > 0 {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
         Some(Commands::App {
             install,
             update,
@@ -340,14 +363,13 @@ async fn run_async(cli: Cli, settings: Settings) -> Result<()> {
             priority,
             tags,
         }) => {
-            let agent = AgentLoop::new(settings, false)?;
-            let title: String = brief.chars().take(80).collect();
-            let tags = merge_tags(&tags, &title, &brief);
-            let task = agent.tasks().add(&title, &brief, priority, &tags)?;
+            // Natural-language brief: let the model route it (reminder, action, task, answer).
+            let _ = (priority, tags);
+            let outcome = piya::ui::assign::converse_task(&settings, &[], &brief);
             if cli.json {
-                print_json(&task)?;
+                print_json(&serde_json::json!({ "reply": outcome.reply }))?;
             } else {
-                println!("Assigned task {}… — {}", &task.id[..8], task.title);
+                println!("{}", outcome.reply);
             }
             Ok(())
         }
@@ -403,6 +425,20 @@ async fn run_async(cli: Cli, settings: Settings) -> Result<()> {
                 print_json(&agent.status_report()?)?;
             } else {
                 agent.show_status()?;
+            }
+            Ok(())
+        }
+        Some(Commands::Cleanup { dry_run }) => {
+            let report = piya::cleanup::run(&settings, dry_run).await?;
+            let verb = if dry_run { "Would cancel" } else { "Cancelled" };
+            println!("{verb} {} legacy task(s):", report.cancelled.len());
+            for t in &report.cancelled {
+                println!("  - {t}");
+            }
+            let verb = if dry_run { "Would delete" } else { "Deleted" };
+            println!("{verb} {} misleading agent memory(ies):", report.memories_deleted.len());
+            for m in &report.memories_deleted {
+                println!("  - {m}");
             }
             Ok(())
         }

@@ -146,6 +146,9 @@ struct SettingsView: View {
             GeneralSettingsTab()
                 .tabItem { Label("General", systemImage: "gearshape") }
                 .tag(SettingsTab.general)
+            ModelsSettingsTab()
+                .tabItem { Label("Models", systemImage: "cpu") }
+                .tag(SettingsTab.models)
             YouSettingsTab()
                 .tabItem { Label("You", systemImage: "person") }
                 .tag(SettingsTab.you)
@@ -168,40 +171,12 @@ struct SettingsView: View {
 
 // MARK: - General
 
-private enum KnownChatModels {
-    static let options = [
-        "gpt-4o-mini",
-        "gpt-4o",
-        "gpt-4.1-mini",
-        "gpt-4.1",
-        "o4-mini",
-        "o3-mini",
-        "gpt-4-turbo",
-    ]
-    static let customTag = "__custom__"
-    static let `default` = "gpt-4o-mini"
-}
-
 private struct GeneralSettingsTab: View {
     @ObservedObject private var updater = UpdateController.shared
     @State private var version = ""
     @State private var dataDir = ""
     @State private var workspace = ""
-    @State private var apiKey = ""
-    @State private var baseUrl = ""
-    @State private var modelSelection = KnownChatModels.default
-    @State private var customModel = ""
-    @State private var revealApiKey = false
     @State private var status = ""
-    @State private var notify = "all"
-    @State private var shellPolicy = "ask"
-
-    private var resolvedModel: String {
-        if modelSelection == KnownChatModels.customTag {
-            return customModel.trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        return modelSelection
-    }
 
     var body: some View {
         Form {
@@ -220,52 +195,12 @@ private struct GeneralSettingsTab: View {
             }
 
             Section("Model") {
-                LabeledContent("OpenAI API key") {
-                    HStack(spacing: 6) {
-                        Group {
-                            if revealApiKey {
-                                TextField("sk-…", text: $apiKey)
-                            } else {
-                                SecureField("sk-…", text: $apiKey)
-                            }
-                        }
-                        .textFieldStyle(.roundedBorder)
-                        .frame(width: 200)
-                        .lineLimit(1)
-
-                        Button {
-                            revealApiKey.toggle()
-                        } label: {
-                            Image(systemName: revealApiKey ? "eye.slash" : "eye")
-                        }
-                        .buttonStyle(.borderless)
-                        .help(revealApiKey ? "Hide key" : "Reveal key")
-                        .accessibilityLabel(revealApiKey ? "Hide API key" : "Reveal API key")
-
-                        Button {
-                            apiKey = ""
-                        } label: {
-                            Image(systemName: "xmark.circle.fill")
-                                .foregroundStyle(.secondary)
-                        }
-                        .buttonStyle(.borderless)
-                        .disabled(apiKey.isEmpty)
-                        .help("Clear key")
-                        .accessibilityLabel("Clear API key")
-                    }
+                LabeledContent("Provider & model") {
+                    Text(modelSummary.isEmpty ? "—" : modelSummary)
+                        .foregroundStyle(.secondary)
                 }
-
-                TextField("Base URL", text: $baseUrl)
-
-                Picker("Model", selection: $modelSelection) {
-                    ForEach(KnownChatModels.options, id: \.self) { name in
-                        Text(name).tag(name)
-                    }
-                    Divider()
-                    Text("Custom…").tag(KnownChatModels.customTag)
-                }
-                if modelSelection == KnownChatModels.customTag {
-                    TextField("Custom model id", text: $customModel)
+                Button("Change in Models…") {
+                    updater.selectedSettingsTab = .models
                 }
             }
 
@@ -290,17 +225,13 @@ private struct GeneralSettingsTab: View {
                 }
             }
 
-            HStack {
-                Button("Reload") { load() }
-                Spacer()
-                Button("Save") { save() }
-                    .keyboardShortcut(.defaultAction)
-            }
         }
         .formStyle(.grouped)
         .padding()
         .onAppear(perform: load)
     }
+
+    @State private var modelSummary = ""
 
     @ViewBuilder
     private var updateActionButton: some View {
@@ -409,53 +340,15 @@ private struct GeneralSettingsTab: View {
         }
     }
 
-    private func applyModelSelection(_ value: String) {
-        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.isEmpty {
-            modelSelection = KnownChatModels.default
-            customModel = ""
-        } else if KnownChatModels.options.contains(trimmed) {
-            modelSelection = trimmed
-            customModel = ""
-        } else {
-            modelSelection = KnownChatModels.customTag
-            customModel = trimmed
-        }
-    }
-
     private func load() {
         version = PiyaBackend.version
         dataDir = PiyaBackend.dataDirectory
         workspace = (try? PiyaBackend.workspaceDirectory) ?? ""
-        revealApiKey = false
-        do {
-            let env = try PiyaBackend.appEnvSettings()
-            apiKey = env.openaiApiKey
-            baseUrl = env.openaiBaseUrl
-            applyModelSelection(env.model)
-            notify = env.notify
-            shellPolicy = env.shellPolicy
-            status = ""
-        } catch {
-            status = error.localizedDescription
+        if let m = try? PiyaBackend.modelSettings() {
+            let label = PiyaBackend.providers().first { $0.id == m.provider }?.label ?? m.provider
+            modelSummary = m.model.isEmpty ? "\(label) · no model chosen" : "\(label) · \(m.model)"
         }
-    }
-
-    private func save() {
-        do {
-            // Preserve notify/shell from other tabs if General save runs alone.
-            let current = (try? PiyaBackend.appEnvSettings())
-            try PiyaBackend.saveAppEnvSettings(
-                apiKey: apiKey,
-                baseUrl: baseUrl,
-                model: resolvedModel.isEmpty ? KnownChatModels.default : resolvedModel,
-                notify: current?.notify ?? notify,
-                shellPolicy: current?.shellPolicy ?? shellPolicy
-            )
-            status = "Saved — model settings apply on the next message."
-        } catch {
-            status = error.localizedDescription
-        }
+        status = ""
     }
 }
 
@@ -639,9 +532,6 @@ private struct MemorySettingsTab: View {
 private struct NotificationsSettingsTab: View {
     @State private var mode = "all"
     @State private var status = ""
-    @State private var apiKey = ""
-    @State private var baseUrl = ""
-    @State private var model = ""
     @State private var shellPolicy = "ask"
 
     private let modes = [
@@ -662,6 +552,15 @@ private struct NotificationsSettingsTab: View {
                 Text("Maps to PIYA_NOTIFY. Task finish and chat alerts respect this setting.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            Section("Major alerts") {
+                Text("For important reminders, or when you ask for an on-screen alert (\"show it on my screen\"), Piya opens a panel in the middle of the screen. It floats above full-screen apps and stays until you click Done or Snooze. It shows even in Quiet mode; only Off hides it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Button("Test major alert") {
+                    PiyaBackend.testMajorAlert()
+                }
                 Button("Open Notifications Settings…") {
                     if let url = URL(string: "x-apple.systempreferences:com.apple.Notifications-Settings.extension") {
                         NSWorkspace.shared.open(url)
@@ -692,9 +591,6 @@ private struct NotificationsSettingsTab: View {
     private func load() {
         do {
             let env = try PiyaBackend.appEnvSettings()
-            apiKey = env.openaiApiKey
-            baseUrl = env.openaiBaseUrl
-            model = env.model
             shellPolicy = env.shellPolicy
             let raw = env.notify.lowercased()
             if raw == "badge" {
@@ -712,13 +608,7 @@ private struct NotificationsSettingsTab: View {
 
     private func save() {
         do {
-            try PiyaBackend.saveAppEnvSettings(
-                apiKey: apiKey,
-                baseUrl: baseUrl,
-                model: model,
-                notify: mode,
-                shellPolicy: shellPolicy
-            )
+            try PiyaBackend.saveAppEnvSettings(notify: mode, shellPolicy: shellPolicy)
             status = "Saved."
         } catch {
             status = error.localizedDescription
@@ -731,9 +621,6 @@ private struct NotificationsSettingsTab: View {
 private struct ShellSettingsTab: View {
     @State private var policy = "ask"
     @State private var status = ""
-    @State private var apiKey = ""
-    @State private var baseUrl = ""
-    @State private var model = ""
     @State private var notify = "all"
 
     private let policies = [
@@ -777,9 +664,6 @@ private struct ShellSettingsTab: View {
     private func load() {
         do {
             let env = try PiyaBackend.appEnvSettings()
-            apiKey = env.openaiApiKey
-            baseUrl = env.openaiBaseUrl
-            model = env.model
             notify = env.notify
             let raw = env.shellPolicy.lowercased()
             if raw == "allow" || raw == "auto" || raw == "1" || raw == "true" {
@@ -797,13 +681,7 @@ private struct ShellSettingsTab: View {
 
     private func save() {
         do {
-            try PiyaBackend.saveAppEnvSettings(
-                apiKey: apiKey,
-                baseUrl: baseUrl,
-                model: model,
-                notify: notify,
-                shellPolicy: policy
-            )
+            try PiyaBackend.saveAppEnvSettings(notify: notify, shellPolicy: policy)
             status = "Saved — applies to the next shell command."
         } catch {
             status = error.localizedDescription

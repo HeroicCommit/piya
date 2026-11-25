@@ -26,6 +26,14 @@ pub fn task_started(title: &str) {
     signal("started".into(), title.to_string(), String::new());
 }
 
+/// Major alert: a panel that stays on screen (above full-screen apps) until dismissed.
+/// For important reminders or when the user explicitly asks for an on-screen alert.
+/// Shown even in quiet (badge) mode; only `PIYA_NOTIFY=off` suppresses it.
+pub fn major_alert(title: &str, body: &str) {
+    let title = if title.trim().is_empty() { "Piya" } else { title.trim() };
+    signal("major".into(), title.to_string(), body.trim().to_string());
+}
+
 /// User-facing alert (test notification, reminders from chat, etc.).
 pub fn user_alert(title: &str, body: &str) {
     let title = if title.trim().is_empty() {
@@ -37,6 +45,19 @@ pub fn user_alert(title: &str, body: &str) {
 }
 
 fn signal(event: String, title: String, detail: String) {
+    // Evals record notifications to a file instead of showing banners.
+    if let Some(log) = std::env::var_os("PIYA_NOTIFY_LOG") {
+        let line = serde_json::json!({ "event": event, "title": title, "detail": detail });
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log)
+            .and_then(|mut f| {
+                use std::io::Write;
+                writeln!(f, "{line}")
+            });
+        return;
+    }
     if notify_disabled() {
         return;
     }
@@ -55,6 +76,11 @@ fn signal(event: String, title: String, detail: String) {
     // badge-signal.json via UserNotifications for a branded banner.
     if event == "finished" || event == "notify" {
         crate::notify::send_popup("Piya", &title, &detail);
+    }
+    // No menu-bar app to draw the panel: fall back to a system alert that stays until clicked.
+    if event == "major" && !gui_running() {
+        crate::notify::send_popup("Piya", &title, &detail);
+        system_alert(&title, &detail);
     }
 
     hint_badge_once();
@@ -80,6 +106,35 @@ pub fn load_last_notified() -> Option<String> {
 
 pub fn save_last_notified(raw: &str) {
     let _ = std::fs::write(last_notified_path(), raw);
+}
+
+/// The SwiftUI menu-bar app (or its dev build) is running and will draw major alerts.
+fn gui_running() -> bool {
+    std::process::Command::new("pgrep")
+        .args(["-f", r"\.app/Contents/MacOS/Piya"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn applescript_string(s: &str) -> String {
+    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// Blocking-until-clicked system alert, spawned so the caller does not wait.
+fn system_alert(title: &str, body: &str) {
+    let script = format!(
+        "display alert {} message {} as critical buttons {{\"Done\"}} default button \"Done\"",
+        applescript_string(title),
+        applescript_string(if body.is_empty() { "Reminder" } else { body })
+    );
+    let _ = std::process::Command::new("/usr/bin/osascript")
+        .args(["-e", &script])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
 }
 
 fn notify_disabled() -> bool {

@@ -3,7 +3,7 @@
 //! On first open, rows from the legacy SQLite `memory.db` are migrated automatically.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
@@ -25,6 +25,10 @@ use crate::llm::LlmClient;
 
 /// Default OpenAI `text-embedding-3-small` dimensionality.
 const DEFAULT_DIM: i32 = 1536;
+/// Embeddings model that built memory indexes before the model was configurable.
+const LEGACY_EMBEDDING_ID: &str = "openai:text-embedding-3-small";
+/// Records which embeddings model built `memory.lance` (vectors from different models are incomparable).
+const EMBEDDING_META_FILE: &str = "memory-embedding.json";
 const TABLE_NAME: &str = "memories";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -148,7 +152,10 @@ struct VectorMemoryInner {
     lance_dir: PathBuf,
     legacy_sqlite: PathBuf,
     llm: LlmClient,
-    dim: i32,
+    /// Vector size of the open table (depends on the embeddings model).
+    dim: AtomicI32,
+    /// Set when the index was built by another embeddings model and re-indexing failed.
+    stale_index: std::sync::Mutex<Option<String>>,
     table: OnceCell<Table>,
     writes_since_optimize: AtomicUsize,
 }
@@ -164,7 +171,8 @@ impl VectorMemory {
                 lance_dir,
                 legacy_sqlite: data_dir.join("memory.db"),
                 llm,
-                dim: DEFAULT_DIM,
+                dim: AtomicI32::new(DEFAULT_DIM),
+                stale_index: std::sync::Mutex::new(None),
                 table: OnceCell::new(),
                 writes_since_optimize: AtomicUsize::new(0),
             }),
@@ -178,6 +186,29 @@ impl VectorMemory {
             .await
     }
 
+    fn dim(&self) -> i32 {
+        self.inner.dim.load(Ordering::Relaxed)
+    }
+
+    fn data_dir(&self) -> PathBuf {
+        self.inner
+            .lance_dir
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
+
+    fn read_embedding_meta(&self) -> Option<String> {
+        let raw = std::fs::read_to_string(self.data_dir().join(EMBEDDING_META_FILE)).ok()?;
+        let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+        v.get("embedding").and_then(|e| e.as_str()).map(str::to_string)
+    }
+
+    fn write_embedding_meta(&self, id: &str, dim: i32) {
+        let body = serde_json::json!({ "embedding": id, "dim": dim, "updated_at": Utc::now().to_rfc3339() });
+        let _ = std::fs::write(self.data_dir().join(EMBEDDING_META_FILE), body.to_string());
+    }
+
     async fn open_or_create(&self) -> Result<Table> {
         let uri = self
             .inner
@@ -185,29 +216,54 @@ impl VectorMemory {
             .to_str()
             .ok_or_else(|| anyhow!("memory.lance path is not valid UTF-8"))?;
         let db = connect(uri).execute().await.context("connect LanceDB")?;
+        let current = self.inner.llm.embedding_id();
 
         let names = db.table_names().execute().await.context("list LanceDB tables")?;
-        let table = if names.iter().any(|n| n == TABLE_NAME) {
-            db.open_table(TABLE_NAME)
+        let mut table = if names.iter().any(|n| n == TABLE_NAME) {
+            let table = db
+                .open_table(TABLE_NAME)
                 .execute()
                 .await
-                .context("open memories table")?
+                .context("open memories table")?;
+            if let Some(dim) = table_dim(&table).await {
+                self.inner.dim.store(dim, Ordering::Relaxed);
+            }
+            table
         } else {
-            let schema = memories_schema(self.inner.dim);
-            let empty = RecordBatch::new_empty(schema.clone());
-            let batches: Box<dyn RecordBatchReader + Send> =
-                Box::new(RecordBatchIterator::new(vec![Ok(empty)], schema));
-            db.create_table(TABLE_NAME, batches)
-                .execute()
-                .await
-                .context("create memories table")?
+            let dim = match &current {
+                Some(_) => self.probe_dim().await.unwrap_or(DEFAULT_DIM),
+                None => DEFAULT_DIM,
+            };
+            self.inner.dim.store(dim, Ordering::Relaxed);
+            let table = create_table(&db, dim, Vec::new()).await?;
+            if let Some(id) = &current {
+                self.write_embedding_meta(id, dim);
+            }
+            table
         };
+
+        // Vectors from different embeddings models are incomparable: re-index on change.
+        if let Some(id) = &current {
+            let built_with = self.read_embedding_meta().or_else(|| {
+                (self.dim() == DEFAULT_DIM).then(|| LEGACY_EMBEDDING_ID.to_string())
+            });
+            if built_with.as_deref() != Some(id.as_str()) {
+                match self.reindex(&db, &table, id).await {
+                    Ok(t) => table = t,
+                    Err(err) => {
+                        eprintln!("piya: memory re-index for {id} failed: {err:#}");
+                        *self.inner.stale_index.lock().unwrap() = Some(format!(
+                            "memory was indexed with {} and re-indexing for {id} failed: {err:#}",
+                            built_with.as_deref().unwrap_or("another model")
+                        ));
+                    }
+                }
+            }
+        }
 
         let count = table.count_rows(None).await.unwrap_or(0);
         if count == 0 && self.inner.legacy_sqlite.is_file() {
-            if let Err(err) =
-                migrate_sqlite_into(&table, &self.inner.legacy_sqlite, self.inner.dim).await
-            {
+            if let Err(err) = migrate_sqlite_into(&table, &self.inner.legacy_sqlite, self.dim()).await {
                 eprintln!("piya: LanceDB migration from memory.db skipped: {err}");
             } else {
                 let bak = self.inner.legacy_sqlite.with_extension("db.bak");
@@ -223,6 +279,81 @@ impl VectorMemory {
         // directory does not grow without bound.
         run_optimize(&table).await;
 
+        Ok(table)
+    }
+
+    async fn probe_dim(&self) -> Result<i32> {
+        let v = self.inner.llm.embed(&["dimension probe".to_string()]).await?;
+        let n = v.first().map(|e| e.len()).unwrap_or(0);
+        anyhow::ensure!(n > 0, "embeddings model returned an empty vector");
+        Ok(n as i32)
+    }
+
+    /// Re-embed every memory with the current embeddings model and rebuild the table.
+    /// Texts and metadata are kept; a JSONL backup is written before the old table is dropped.
+    async fn reindex(&self, db: &lancedb::Connection, table: &Table, embedding_id: &str) -> Result<Table> {
+        let data_dir = self.data_dir();
+        let lock = data_dir.join("memory-reindex.lock");
+        if let Ok(meta) = std::fs::metadata(&lock) {
+            let fresh = meta
+                .modified()
+                .ok()
+                .and_then(|m| m.elapsed().ok())
+                .is_some_and(|age| age.as_secs() < 600);
+            if fresh {
+                anyhow::bail!("another Piya process is re-indexing memory");
+            }
+        }
+        std::fs::write(&lock, std::process::id().to_string())?;
+        let result = self.reindex_locked(db, table, embedding_id).await;
+        let _ = std::fs::remove_file(&lock);
+        result
+    }
+
+    async fn reindex_locked(&self, db: &lancedb::Connection, table: &Table, embedding_id: &str) -> Result<Table> {
+        let data_dir = self.data_dir();
+        let rows = read_all_rows(table).await?;
+        eprintln!("piya: re-indexing {} memories with {embedding_id}…", rows.len());
+
+        let mut vectors: Vec<Vec<f32>> = Vec::with_capacity(rows.len());
+        for chunk in rows.chunks(64) {
+            let texts: Vec<String> = chunk.iter().map(|r| r.text.clone()).collect();
+            let embedded = self.inner.llm.embed(&texts).await?;
+            anyhow::ensure!(embedded.len() == texts.len(), "embeddings response size mismatch");
+            vectors.extend(embedded);
+        }
+        let dim = match vectors.first() {
+            Some(v) => v.len() as i32,
+            None => self.probe_dim().await?,
+        };
+        let rows: Vec<MemoryRow> = rows
+            .into_iter()
+            .zip(vectors)
+            .map(|(mut r, v)| {
+                r.vector = v;
+                r
+            })
+            .collect();
+
+        // Backup first: dropping the table is the only destructive step.
+        let backup = data_dir.join(format!("memory-backup-{}.jsonl", Utc::now().format("%Y%m%d-%H%M%S")));
+        let lines: Vec<String> = rows
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "id": r.id, "text": r.text, "kind": r.kind, "task_id": r.task_id, "tags": r.tags,
+                    "accuracy": r.accuracy, "source": r.source, "created_at": r.created_at,
+                })
+                .to_string()
+            })
+            .collect();
+        std::fs::write(&backup, lines.join("\n")).context("write memory backup")?;
+
+        db.drop_table(TABLE_NAME, &[]).await.context("drop old memories table")?;
+        let table = create_table(db, dim, rows).await?;
+        self.inner.dim.store(dim, Ordering::Relaxed);
+        self.write_embedding_meta(embedding_id, dim);
+        eprintln!("piya: memory re-indexed with {embedding_id} (dim {dim}); backup at {}", backup.display());
         Ok(table)
     }
 
@@ -247,6 +378,11 @@ impl VectorMemory {
     }
 
     async fn embed_one(&self, text: &str) -> Result<Vec<f32>> {
+        // Open first so a model change re-indexes before we compare dimensions.
+        self.table().await?;
+        if let Some(err) = self.inner.stale_index.lock().unwrap().clone() {
+            anyhow::bail!("{err}");
+        }
         let embedding = self
             .inner
             .llm
@@ -256,10 +392,10 @@ impl VectorMemory {
             .next()
             .context("empty embedding response")?;
         anyhow::ensure!(
-            embedding.len() == self.inner.dim as usize,
-            "embedding dim {} != expected {}",
+            embedding.len() == self.dim() as usize,
+            "embedding size {} does not match the memory index ({}); restart Piya to re-index",
             embedding.len(),
-            self.inner.dim
+            self.dim()
         );
         Ok(embedding)
     }
@@ -307,7 +443,7 @@ impl VectorMemory {
         let id = Uuid::new_v4().to_string();
         let table = self.table().await?;
         let batch = memory_batch(
-            self.inner.dim,
+            self.dim(),
             &[MemoryRow {
                 id: id.clone(),
                 text: text.to_string(),
@@ -581,6 +717,76 @@ struct MemoryRow {
     created_at: String,
     recall_count: i64,
     vector: Vec<f32>,
+}
+
+/// Vector size of an existing table, from its schema.
+async fn table_dim(table: &Table) -> Option<i32> {
+    let schema = table.schema().await.ok()?;
+    match schema.field_with_name("vector").ok()?.data_type() {
+        DataType::FixedSizeList(_, n) => Some(*n),
+        _ => None,
+    }
+}
+
+async fn create_table(db: &lancedb::Connection, dim: i32, rows: Vec<MemoryRow>) -> Result<Table> {
+    let schema = memories_schema(dim);
+    let batch = if rows.is_empty() {
+        RecordBatch::new_empty(schema.clone())
+    } else {
+        memory_batch(dim, &rows)?
+    };
+    let batches: Box<dyn RecordBatchReader + Send> =
+        Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema));
+    db.create_table(TABLE_NAME, batches)
+        .execute()
+        .await
+        .context("create memories table")
+}
+
+/// Every row (without vectors) for re-indexing.
+async fn read_all_rows(table: &Table) -> Result<Vec<MemoryRow>> {
+    let total = table.count_rows(None).await.unwrap_or(0);
+    if total == 0 {
+        return Ok(Vec::new());
+    }
+    let batches = table
+        .query()
+        .select(lancedb::query::Select::columns(&[
+            "id", "text", "kind", "task_id", "tags", "accuracy", "source", "created_at",
+        ]))
+        .limit(total)
+        .execute()
+        .await
+        .context("read memories for re-index")?
+        .try_collect::<Vec<_>>()
+        .await
+        .context("collect memories for re-index")?;
+    let mut rows = Vec::with_capacity(total);
+    for batch in batches {
+        let ids = column_utf8(&batch, "id")?;
+        let texts = column_utf8(&batch, "text")?;
+        let kinds = column_utf8(&batch, "kind")?;
+        let task_ids = column_utf8(&batch, "task_id").unwrap_or_default();
+        let tags = column_utf8(&batch, "tags").unwrap_or_default();
+        let accuracy = column_f64(&batch, "accuracy").unwrap_or_default();
+        let sources = column_utf8(&batch, "source").unwrap_or_default();
+        let created = column_utf8(&batch, "created_at").unwrap_or_default();
+        for i in 0..batch.num_rows() {
+            rows.push(MemoryRow {
+                id: ids.get(i).cloned().unwrap_or_default(),
+                text: texts.get(i).cloned().unwrap_or_default(),
+                kind: kinds.get(i).cloned().unwrap_or_default(),
+                task_id: task_ids.get(i).cloned().unwrap_or_default(),
+                tags: tags.get(i).cloned().unwrap_or_else(|| "[]".into()),
+                accuracy: accuracy.get(i).copied().unwrap_or(0.5),
+                source: sources.get(i).cloned().unwrap_or_default(),
+                created_at: created.get(i).cloned().unwrap_or_default(),
+                recall_count: 0,
+                vector: Vec::new(),
+            });
+        }
+    }
+    Ok(rows)
 }
 
 /// Compact + prune after this many writes in one process.

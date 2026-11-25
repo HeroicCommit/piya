@@ -34,7 +34,10 @@ final class TaskNotificationWatcher: NSObject, UNUserNotificationCenterDelegate 
         }
 
         dataDir = PiyaBackend.dataDirectory
-        lastPayload = readSignal()
+        // Skip signals from before launch — except a major alert, which must not be lost
+        // if the app restarts right after it was raised (poll() still drops ones >90s old).
+        let existing = readSignal()
+        lastPayload = (existing?.contains("\"event\":\"major\"") ?? false) ? nil : existing
 
         timer?.invalidate()
         // Fast poll so chat `piya_notify` feels instant.
@@ -82,6 +85,10 @@ final class TaskNotificationWatcher: NSObject, UNUserNotificationCenterDelegate 
         switch event {
         case "notify":
             post(title: title, body: detail.isEmpty ? "Notification" : detail)
+        case "major":
+            // On-screen panel that stays until dismissed, plus a banner for Notification Center history.
+            MajorAlertPresenter.shared.show(title: title, body: detail)
+            post(title: title, body: detail.isEmpty ? "Reminder" : detail)
         case "finished":
             post(title: title, body: detail.isEmpty ? "Task finished" : detail)
         case "started":

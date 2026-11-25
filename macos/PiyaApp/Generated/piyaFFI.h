@@ -318,6 +318,12 @@ RustBuffer uniffi_piya_fn_func_piya_get_app_env_settings(RustCallStatus *_Nonnul
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_GET_MODEL_SETTINGS
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_GET_MODEL_SETTINGS
+RustBuffer uniffi_piya_fn_func_piya_get_model_settings(RustCallStatus *_Nonnull out_status
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_GET_USER_PREFS
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_GET_USER_PREFS
 RustBuffer uniffi_piya_fn_func_piya_get_user_prefs(RustCallStatus *_Nonnull out_status
@@ -328,6 +334,11 @@ RustBuffer uniffi_piya_fn_func_piya_get_user_prefs(RustCallStatus *_Nonnull out_
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_INSTALL_UPDATE_AND_RELAUNCH
 RustBuffer uniffi_piya_fn_func_piya_install_update_and_relaunch(RustCallStatus *_Nonnull out_status
     
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_KEY_WARNING
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_KEY_WARNING
+RustBuffer uniffi_piya_fn_func_piya_key_warning(RustBuffer provider, RustBuffer api_key, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_LIST_CHAT_SESSIONS
@@ -345,6 +356,17 @@ RustBuffer uniffi_piya_fn_func_piya_list_mcp_servers(RustCallStatus *_Nonnull ou
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_LIST_MEMORIES
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_LIST_MEMORIES
 RustBuffer uniffi_piya_fn_func_piya_list_memories(uint32_t limit, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_LIST_MODELS
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_LIST_MODELS
+RustBuffer uniffi_piya_fn_func_piya_list_models(RustBuffer provider, RustBuffer api_key, RustBuffer base_url, int8_t embeddings, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_LIST_PROVIDERS
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_LIST_PROVIDERS
+RustBuffer uniffi_piya_fn_func_piya_list_providers(RustCallStatus *_Nonnull out_status
+    
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_LIST_TASKS
@@ -386,6 +408,11 @@ void uniffi_piya_fn_func_piya_save_chat_session(RustBuffer mode, RustBuffer mess
 void uniffi_piya_fn_func_piya_save_mcp_servers(RustBuffer servers, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_SAVE_MODEL_SETTINGS
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_SAVE_MODEL_SETTINGS
+void uniffi_piya_fn_func_piya_save_model_settings(RustBuffer settings, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_SAVE_USER_PREFS
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_SAVE_USER_PREFS
 void uniffi_piya_fn_func_piya_save_user_prefs(RustBuffer prefs, RustCallStatus *_Nonnull out_status
@@ -406,9 +433,25 @@ RustBuffer uniffi_piya_fn_func_piya_send(RustBuffer message, RustBuffer mode, Ru
 void uniffi_piya_fn_func_piya_send_notification(RustBuffer title, RustBuffer body, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_SNOOZE_ALERT
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_SNOOZE_ALERT
+RustBuffer uniffi_piya_fn_func_piya_snooze_alert(RustBuffer title, RustBuffer body, uint32_t minutes, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_TEST_MAJOR_ALERT
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_TEST_MAJOR_ALERT
+void uniffi_piya_fn_func_piya_test_major_alert(RustCallStatus *_Nonnull out_status
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_TEST_MCP_SERVER
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_TEST_MCP_SERVER
 RustBuffer uniffi_piya_fn_func_piya_test_mcp_server(RustBuffer server, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_TEST_MODEL
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_TEST_MODEL
+RustBuffer uniffi_piya_fn_func_piya_test_model(RustBuffer provider, RustBuffer api_key, RustBuffer base_url, RustBuffer model, int8_t embeddings, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_UPDATE_TASK
@@ -780,6 +823,12 @@ uint16_t uniffi_piya_checksum_func_piya_get_app_env_settings(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_GET_MODEL_SETTINGS
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_GET_MODEL_SETTINGS
+uint16_t uniffi_piya_checksum_func_piya_get_model_settings(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_GET_USER_PREFS
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_GET_USER_PREFS
 uint16_t uniffi_piya_checksum_func_piya_get_user_prefs(void
@@ -789,6 +838,12 @@ uint16_t uniffi_piya_checksum_func_piya_get_user_prefs(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_INSTALL_UPDATE_AND_RELAUNCH
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_INSTALL_UPDATE_AND_RELAUNCH
 uint16_t uniffi_piya_checksum_func_piya_install_update_and_relaunch(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_KEY_WARNING
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_KEY_WARNING
+uint16_t uniffi_piya_checksum_func_piya_key_warning(void
     
 );
 #endif
@@ -807,6 +862,18 @@ uint16_t uniffi_piya_checksum_func_piya_list_mcp_servers(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_LIST_MEMORIES
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_LIST_MEMORIES
 uint16_t uniffi_piya_checksum_func_piya_list_memories(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_LIST_MODELS
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_LIST_MODELS
+uint16_t uniffi_piya_checksum_func_piya_list_models(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_LIST_PROVIDERS
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_LIST_PROVIDERS
+uint16_t uniffi_piya_checksum_func_piya_list_providers(void
     
 );
 #endif
@@ -852,6 +919,12 @@ uint16_t uniffi_piya_checksum_func_piya_save_mcp_servers(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_SAVE_MODEL_SETTINGS
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_SAVE_MODEL_SETTINGS
+uint16_t uniffi_piya_checksum_func_piya_save_model_settings(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_SAVE_USER_PREFS
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_SAVE_USER_PREFS
 uint16_t uniffi_piya_checksum_func_piya_save_user_prefs(void
@@ -876,9 +949,27 @@ uint16_t uniffi_piya_checksum_func_piya_send_notification(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_SNOOZE_ALERT
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_SNOOZE_ALERT
+uint16_t uniffi_piya_checksum_func_piya_snooze_alert(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_TEST_MAJOR_ALERT
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_TEST_MAJOR_ALERT
+uint16_t uniffi_piya_checksum_func_piya_test_major_alert(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_TEST_MCP_SERVER
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_TEST_MCP_SERVER
 uint16_t uniffi_piya_checksum_func_piya_test_mcp_server(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_TEST_MODEL
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_TEST_MODEL
+uint16_t uniffi_piya_checksum_func_piya_test_model(void
     
 );
 #endif
