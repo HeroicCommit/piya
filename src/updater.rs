@@ -597,11 +597,36 @@ fn stop_idle_worker(data_dir: &Path) {
         }
         let _ = std::fs::remove_file(lock);
     }
+    // Workers spawned by the GUI inherit a signal mask that can swallow SIGINT/SIGTERM,
+    // and the lock file may be stale. Callers have already waited for in-progress tasks,
+    // so escalate to SIGKILL for any bundled worker that is still alive — otherwise the
+    // old binary keeps running from memory after the swap.
+    const WORKER_PATTERN: &str = "/Applications/Piya.app/Contents/Helpers/piya run";
+    let worker_alive = || {
+        Command::new("pgrep")
+            .args(["-f", WORKER_PATTERN])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    };
     let _ = Command::new("pkill")
-        .args(["-INT", "-f", "/Applications/Piya.app/Contents/Helpers/piya run"])
+        .args(["-INT", "-f", WORKER_PATTERN])
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status();
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while worker_alive() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    if worker_alive() {
+        let _ = Command::new("pkill")
+            .args(["-9", "-f", WORKER_PATTERN])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
 }
 
 fn is_gui_running() -> bool {

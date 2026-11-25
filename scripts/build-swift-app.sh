@@ -49,6 +49,7 @@ cp "$ROOT/macos/PiyaApp/Generated/piyaFFI.modulemap" "$ROOT/macos/PiyaApp/Genera
 
 echo "==> Building SwiftUI app…"
 cd "$ROOT/macos/PiyaApp"
+BUILD_MARKER="$(mktemp)"
 swift_build() {
   swift build -c release \
     -Xlinker -L -Xlinker "$ROOT/target/release" \
@@ -62,8 +63,13 @@ if ! swift_build; then
   if [[ -z "${SDKROOT:-}" ]]; then
     FALLBACK_SDK="$(ls -d /Library/Developer/CommandLineTools/SDKs/MacOSX[0-9]*.[0-9]*.sdk 2>/dev/null | sort -V | tail -2 | head -1 || true)"
     if [[ -n "$FALLBACK_SDK" ]]; then
-      echo "==> Swift build failed; retrying with SDK $FALLBACK_SDK"
-      SDKROOT="$FALLBACK_SDK" swift_build
+      echo "==> Swift build failed; retrying with SDK $FALLBACK_SDK (clean build dir)"
+      # Module caches from the failed SDK poison the retry; start clean.
+      rm -rf "$ROOT/macos/PiyaApp/.build"
+      if ! SDKROOT="$FALLBACK_SDK" swift_build; then
+        echo "Swift build failed with fallback SDK $FALLBACK_SDK too" >&2
+        exit 1
+      fi
     else
       exit 1
     fi
@@ -73,6 +79,13 @@ if ! swift_build; then
 fi
 
 BIN="$ROOT/macos/PiyaApp/.build/release/Piya"
+# Never package a stale binary left over from an earlier build.
+if [[ ! -f "$BIN" || ! "$BIN" -nt "$BUILD_MARKER" ]]; then
+  echo "Swift binary $BIN was not rebuilt — refusing to package a stale app" >&2
+  rm -f "$BUILD_MARKER"
+  exit 1
+fi
+rm -f "$BUILD_MARKER"
 STAGE="$ROOT/dist/build.noindex"
 if [[ "$DEV_MODE" -eq 1 ]]; then
   APP="$STAGE/PiyaDev.app"
