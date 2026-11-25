@@ -1,6 +1,6 @@
 [package]
 name = "piya"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 description = "Continuous AI agent with vector memory and an explicit OPPAR improvement loop"
 readme = "README.md"
@@ -50,9 +50,6 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uniffi = { version = "0.29", features = ["cli"] }
 uuid = { version = "1", features = ["v4"] }
-lancedb = "0.31"
-arrow-array = "58"
-arrow-schema = "58"
 futures = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]

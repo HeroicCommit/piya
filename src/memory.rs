@@ -3,7 +3,6 @@
 //! Embeddings are stored as little-endian f32 blobs and ranked by brute-force cosine
 //! similarity, which takes milliseconds for thousands of notes. Each row records the
 //! embeddings model that produced it; when the model changes, rows are re-embedded.
-//! Older installs kept memory in LanceDB (`memory.lance`); it is imported once.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -16,10 +15,6 @@ use uuid::Uuid;
 
 use crate::db;
 use crate::llm::LlmClient;
-
-/// Embeddings model that built memory before the model was configurable.
-const LEGACY_EMBEDDING_ID: &str = "openai:text-embedding-3-small";
-const LANCE_IMPORTED_KEY: &str = "memory_lance_imported";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MemoryKind {
@@ -164,15 +159,11 @@ impl VectorMemory {
         db::open(&self.inner.data_dir)
     }
 
-    /// Import legacy LanceDB memory once, then make sure every row was embedded with
-    /// the current embeddings model.
+    /// Ensure every row was embedded with the current embeddings model.
     async fn ensure_ready(&self) -> Result<()> {
         self.inner
             .ready
             .get_or_try_init(|| async {
-                if let Err(err) = self.import_lance().await {
-                    eprintln!("piya: memory import from memory.lance failed: {err:#}");
-                }
                 if let Err(err) = self.reembed_stale_rows().await {
                     eprintln!("piya: memory re-embedding failed: {err:#}");
                     *self.inner.stale.lock().unwrap() = Some(format!(
@@ -182,44 +173,6 @@ impl VectorMemory {
                 Ok::<(), anyhow::Error>(())
             })
             .await?;
-        Ok(())
-    }
-
-    async fn import_lance(&self) -> Result<()> {
-        let conn = self.conn()?;
-        if db::get_state(&conn, LANCE_IMPORTED_KEY)?.is_some() {
-            return Ok(());
-        }
-        let lance_dir = self.inner.data_dir.join("memory.lance");
-        if !lance_dir.is_dir() {
-            db::set_state(&conn, LANCE_IMPORTED_KEY, "none")?;
-            return Ok(());
-        }
-        let model = std::fs::read_to_string(self.inner.data_dir.join("memory-embedding.json"))
-            .ok()
-            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-            .and_then(|v| v.get("embedding").and_then(|e| e.as_str()).map(str::to_string))
-            .unwrap_or_else(|| LEGACY_EMBEDDING_ID.to_string());
-        let rows = crate::lance_import::export_rows(&lance_dir).await?;
-        let tx = conn.unchecked_transaction()?;
-        for r in &rows {
-            tx.execute(
-                "INSERT OR IGNORE INTO memories(id, text, kind, task_id, tags, accuracy, source, created_at,
-                                               recall_count, embedding, embedding_model)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-                params![
-                    r.id, r.text, r.kind, r.task_id, r.tags, r.accuracy, r.source, r.created_at,
-                    r.recall_count, db::embedding_to_blob(&r.vector), model
-                ],
-            )?;
-        }
-        db::set_state(&tx, LANCE_IMPORTED_KEY, &Utc::now().to_rfc3339())?;
-        tx.commit()?;
-        let backup = self.inner.data_dir.join("memory.lance.migrated");
-        if !backup.exists() {
-            let _ = std::fs::rename(&lance_dir, &backup);
-        }
-        eprintln!("piya: imported {} memories from memory.lance into piya.db", rows.len());
         Ok(())
     }
 

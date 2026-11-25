@@ -10,7 +10,6 @@ pub mod config;
 pub mod db;
 pub mod evals;
 pub mod ffi;
-pub mod lance_import;
 pub mod launch_agent;
 pub mod llm;
 pub mod mcp;
