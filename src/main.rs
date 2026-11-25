@@ -110,6 +110,8 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Move legacy data (JSON chats, LanceDB memory) into piya.db and report counts
+    Migrate,
     /// Run basic-errand evals against the real model (throwaway data dir; asserts on state)
     Eval {
         /// Only run cases whose name contains this text
@@ -440,6 +442,23 @@ async fn run_async(cli: Cli, settings: Settings) -> Result<()> {
             for m in &report.memories_deleted {
                 println!("  - {m}");
             }
+            Ok(())
+        }
+        Some(Commands::Migrate) => {
+            let store = piya::chat_session::ChatSessionStore::open(&settings.data_dir)?;
+            let chats = store.list().len();
+            drop(store);
+            let llm = piya::llm::LlmClient::new(&settings)?;
+            let memory = piya::memory::VectorMemory::new(&settings.data_dir, llm)?;
+            let _ = memory.list_recent(1).await?;
+            let conn = piya::db::open(&settings.data_dir)?;
+            let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap_or(-1) };
+            println!("piya.db: {}", piya::db::path(&settings.data_dir).display());
+            println!("  chats:        {chats} ({} messages)", count("SELECT count(*) FROM chat_messages"));
+            println!("  memories:     {} ({} with embeddings)",
+                count("SELECT count(*) FROM memories"),
+                count("SELECT count(*) FROM memories WHERE embedding IS NOT NULL"));
+            println!("  tasks:        {}", count("SELECT count(*) FROM tasks"));
             Ok(())
         }
         Some(Commands::Optimize) => {
