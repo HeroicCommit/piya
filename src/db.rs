@@ -141,6 +141,51 @@ const MIGRATIONS: &[&str] = &[
         updated_at   TEXT NOT NULL
     );
     "#,
+    // 4: desktop activity timeline, FTS5 screen/window search, and daily rollups
+    r#"
+    CREATE TABLE IF NOT EXISTS activity_events (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        started_at    INTEGER NOT NULL,
+        ended_at      INTEGER NOT NULL,
+        duration_sec  INTEGER NOT NULL DEFAULT 0,
+        app_name      TEXT NOT NULL,
+        bundle_id     TEXT NOT NULL DEFAULT '',
+        window_title  TEXT NOT NULL DEFAULT '',
+        url_or_path   TEXT NOT NULL DEFAULT '',
+        capture_mode  TEXT NOT NULL DEFAULT 'app_only',
+        screen_text   TEXT NOT NULL DEFAULT '',
+        fingerprint   TEXT NOT NULL DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS idx_activity_started ON activity_events(started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_activity_ended ON activity_events(ended_at DESC);
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS activity_events_fts USING fts5(
+        app_name, window_title, url_or_path, screen_text,
+        content='activity_events', content_rowid='id', tokenize='porter unicode61'
+    );
+    CREATE TRIGGER IF NOT EXISTS activity_events_ai AFTER INSERT ON activity_events BEGIN
+        INSERT INTO activity_events_fts(rowid, app_name, window_title, url_or_path, screen_text)
+        VALUES (new.id, new.app_name, new.window_title, new.url_or_path, new.screen_text);
+    END;
+    CREATE TRIGGER IF NOT EXISTS activity_events_ad AFTER DELETE ON activity_events BEGIN
+        INSERT INTO activity_events_fts(activity_events_fts, rowid, app_name, window_title, url_or_path, screen_text)
+        VALUES ('delete', old.id, old.app_name, old.window_title, old.url_or_path, old.screen_text);
+    END;
+    CREATE TRIGGER IF NOT EXISTS activity_events_au AFTER UPDATE OF app_name, window_title, url_or_path, screen_text ON activity_events BEGIN
+        INSERT INTO activity_events_fts(activity_events_fts, rowid, app_name, window_title, url_or_path, screen_text)
+        VALUES ('delete', old.id, old.app_name, old.window_title, old.url_or_path, old.screen_text);
+        INSERT INTO activity_events_fts(rowid, app_name, window_title, url_or_path, screen_text)
+        VALUES (new.id, new.app_name, new.window_title, new.url_or_path, new.screen_text);
+    END;
+
+    CREATE TABLE IF NOT EXISTS activity_rollups (
+        day              TEXT PRIMARY KEY,
+        total_active_sec INTEGER NOT NULL DEFAULT 0,
+        top_apps_json    TEXT NOT NULL DEFAULT '[]',
+        summary          TEXT NOT NULL DEFAULT '',
+        updated_at       TEXT NOT NULL
+    );
+    "#,
 ];
 
 fn migrate(conn: &Connection) -> Result<()> {

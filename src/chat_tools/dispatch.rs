@@ -26,6 +26,7 @@ pub fn is_builtin_tool(name: &str) -> bool {
         || name.starts_with("piya_task_")
         || name.starts_with("piya_memory_")
         || name.starts_with("piya_history_")
+        || name.starts_with("piya_activity_")
         || name.starts_with("piya_skill_")
         || name.starts_with("piya_run_")
         || name.starts_with("piya_schedule_")
@@ -40,6 +41,7 @@ pub fn openai_tools() -> Vec<ChatCompletionTool> {
     tools.extend(task_tools());
     tools.extend(memory_tools());
     tools.extend(history_tools());
+    tools.extend(activity_tools());
     tools.extend(skill_tools());
     tools
 }
@@ -75,6 +77,10 @@ pub fn system_hint() -> &'static str {
        same goal go in a single task's brief; never split one request into several tasks.\n\
      • Questions about tasks, results or why something happened → `piya_task_status` / `piya_schedule_list`. \
        Never queue a task to answer a question.\n\
+     • Questions about what the user is working on, what apps/windows/tabs/documents they used today, \
+       yesterday, or this week, or searching something they saw on screen → `piya_activity_query` \
+       (and check the Live desktop context block). NEVER auto-create tasks or reminders from observed screen \
+       activity unless the user explicitly asks you to create one.\n\
      Verification: only say something is scheduled/cancelled/done when a tool result says so \
      (e.g. 'Saved ✔', 'Cancelled ✔'), and quote the time it reports. If a tool fails, say what failed. \
      When you run a shell command, tell the user the exact command. If the user declines a permission prompt, \
@@ -117,6 +123,7 @@ pub fn dispatch_builtin_tool_with_context(
         "piya_memory_forget" => forget_memory(settings, &args),
         "piya_memory_recall" => recall(settings, &args),
         "piya_history_search" => search_history(settings, &args),
+        "piya_activity_query" => query_activity(settings, &args),
         "piya_skill_read" => read_skill(settings, &args),
         "piya_skill_save" => save_skill(settings, &args),
         "piya_skill_patch" => patch_skill(settings, &args),
@@ -530,6 +537,58 @@ fn patch_skill(settings: &Settings, args: &Value) -> Result<String> {
     let conn = crate::db::open(&settings.data_dir)?;
     let patched = crate::skills::patch_skill(&conn, name, old, new)?;
     Ok(format!("Patched learned skill ✔ `{}`", patched.name))
+}
+
+fn activity_tools() -> Vec<ChatCompletionTool> {
+    vec![tool(
+        "piya_activity_query",
+        "Inspect or search the user's local desktop activity timeline (active apps, window titles, \
+         browser URLs/paths, time spent, daily rollups, and captured screen text). Use when the user \
+         asks what they are working on, what they did today/yesterday/this week, how long they spent \
+         in an app/project, or asks about something they saw on screen earlier. Omit `query` for a \
+         chronological timeline & app breakdown; pass `query` for full-text search.",
+        json!({
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Optional keywords to search across window titles, URLs, file paths, and screen text."
+                },
+                "period": {
+                    "type": "string",
+                    "enum": ["today", "yesterday", "this_week", "last_30_days"],
+                    "description": "Time range preset (defaults to `today`)."
+                },
+                "since": {
+                    "type": "string",
+                    "description": "Optional start date YYYY-MM-DD (overrides `period`)."
+                },
+                "until": {
+                    "type": "string",
+                    "description": "Optional end date YYYY-MM-DD."
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max timeline or search rows to return (default 30)."
+                }
+            }
+        }),
+    )]
+}
+
+fn query_activity(settings: &Settings, args: &Value) -> Result<String> {
+    let conn = crate::db::open(&settings.data_dir)?;
+    let query = args.get("query").and_then(|v| v.as_str());
+    let period = args.get("period").and_then(|v| v.as_str());
+    let since = args.get("since").and_then(|v| v.as_str());
+    let until = args.get("until").and_then(|v| v.as_str());
+    let limit = args
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize)
+        .unwrap_or(30)
+        .clamp(1, 100);
+    crate::activity::query_for_tool(&conn, query, period, since, until, limit)
 }
 
 pub(crate) fn tool(name: &str, description: &str, parameters: Value) -> ChatCompletionTool {

@@ -86,6 +86,7 @@ pub async fn reflect_if_due(settings: &Settings, force: bool) -> Result<ReflectR
     let (mut report, mut watermark, should_reflect) = {
         let conn = db::open(&settings.data_dir)?;
         let _ = notes::migrate_user_memories_once(&conn);
+        let _ = crate::activity::prune_old_events(&conn, prefs.activity_retention_days);
         let (expired_archived, stale_tentative_archived, duplicates_merged) = repair(&conn)?;
         let report = ReflectReport {
             expired_archived,

@@ -159,6 +159,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
   <key>NSUserNotificationAlertStyle</key><string>alert</string>
   <key>NSMicrophoneUsageDescription</key><string>Piya uses your microphone for on-device voice dictation when you use the mic button or push-to-talk.</string>
   <key>NSSpeechRecognitionUsageDescription</key><string>Piya transcribes your voice and audio files privately on your Mac using Apple Speech.</string>
+  <key>NSScreenCaptureUsageDescription</key><string>In Full Activity mode, Piya reads text from your active window on-device with Apple Vision OCR and discards the image immediately.</string>
 </dict>
 </plist>
 EOF

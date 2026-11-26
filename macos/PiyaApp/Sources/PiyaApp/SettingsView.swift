@@ -141,6 +141,9 @@ struct SettingsView: View {
             MemorySettingsTab()
                 .tabItem { Label("Memory", systemImage: "brain") }
                 .tag(SettingsTab.memory)
+            ActivitySettingsTab()
+                .tabItem { Label("Activity", systemImage: "eye") }
+                .tag(SettingsTab.activity)
             NotificationsSettingsTab()
                 .tabItem { Label("Notifications", systemImage: "bell") }
                 .tag(SettingsTab.notifications)

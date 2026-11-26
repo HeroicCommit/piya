@@ -7,6 +7,7 @@ enum SettingsTab: Hashable {
     case models
     case you
     case memory
+    case activity
     case notifications
     case shell
     case mcp

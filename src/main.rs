@@ -118,6 +118,18 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+    /// Inspect or search recorded desktop activity (apps, windows, screen text)
+    Activity {
+        /// Optional search query across windows, URLs, and screen text
+        #[arg(long, short = 's')]
+        search: Option<String>,
+        /// Period (`today`, `yesterday`, `this_week`, `last_30_days`)
+        #[arg(long, short = 'p', default_value = "today")]
+        period: String,
+        /// Clear recorded activity (`--clear` clears all; combine with `--today` for today only)
+        #[arg(long)]
+        clear: bool,
+    },
     /// Run basic-errand evals against the real model (throwaway data dir; asserts on state)
     Eval {
         /// Only run cases whose name contains this text
@@ -481,6 +493,28 @@ async fn run_async(cli: Cli, settings: Settings) -> Result<()> {
                 r.expired_archived,
                 r.duplicates_merged
             );
+            Ok(())
+        }
+        Some(Commands::Activity {
+            search,
+            period,
+            clear,
+        }) => {
+            let conn = piya::db::open(&settings.data_dir)?;
+            if clear {
+                let n = piya::activity::clear_activity(&conn, period == "today")?;
+                println!("Cleared {n} activity event(s).");
+                return Ok(());
+            }
+            let out = piya::activity::query_for_tool(
+                &conn,
+                search.as_deref(),
+                Some(&period),
+                None,
+                None,
+                40,
+            )?;
+            println!("{out}");
             Ok(())
         }
         Some(Commands::Optimize) => {

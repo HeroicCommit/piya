@@ -253,7 +253,7 @@ async fn reply_async(
         );
     }
 
-    let (notes_index, skills_index, related_history, active_session_id) =
+    let (notes_index, skills_index, related_history, live_activity, active_session_id) =
         match crate::db::open(&settings.data_dir) {
             Ok(conn) => {
                 let active_sid = crate::db::get_state(&conn, "chat_active_session")
@@ -267,9 +267,10 @@ async fn reply_async(
                     &recall_seed,
                     4,
                 );
-                (notes_idx, skills_idx, rel, active_sid)
+                let live_act = crate::activity::format_live_context(&conn, &prefs);
+                (notes_idx, skills_idx, rel, live_act, active_sid)
             }
-            Err(_) => (String::new(), String::new(), String::new(), None),
+            Err(_) => (String::new(), String::new(), String::new(), String::new(), None),
         };
 
     if !notes_index.is_empty() {
@@ -306,6 +307,10 @@ async fn reply_async(
     }
 
     // Volatile context last so the stable prefix above stays cacheable.
+    if !live_activity.is_empty() {
+        system.push_str("\n\n");
+        system.push_str(&live_activity);
+    }
     system.push_str("\n\n");
     system.push_str(&ledger_block(settings));
     system.push_str("\n\n");

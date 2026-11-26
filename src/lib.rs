@@ -1,3 +1,4 @@
+pub mod activity;
 pub mod agent;
 pub mod attachments;
 pub mod cpu_monitor;

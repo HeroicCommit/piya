@@ -1142,3 +1142,197 @@ pub fn piya_export_memory_markdown() -> Result<String, PiyaError> {
     let conn = crate::db::open(&settings.data_dir).map_err(map_err)?;
     crate::notes::export_markdown(&conn).map_err(map_err)
 }
+
+// ----- Desktop Activity Tracking ----------------------------------------------
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiActivitySettings {
+    pub mode: String,
+    pub paused_until: i64,
+    pub is_paused: bool,
+    pub excluded_apps: Vec<String>,
+    pub retention_days: u32,
+}
+
+fn activity_settings_from_prefs(prefs: &crate::prefs::UserPrefs) -> FfiActivitySettings {
+    let now = chrono::Utc::now().timestamp();
+    let mode = crate::activity::normalize_mode(&prefs.activity_mode).to_string();
+    FfiActivitySettings {
+        is_paused: mode == "off" || prefs.activity_paused_until > now,
+        mode,
+        paused_until: prefs.activity_paused_until,
+        excluded_apps: prefs.activity_excluded_apps.clone(),
+        retention_days: prefs.activity_retention_days,
+    }
+}
+
+#[uniffi::export]
+pub fn piya_get_activity_settings() -> Result<FfiActivitySettings, PiyaError> {
+    let settings = load_settings()?;
+    let prefs = crate::prefs::UserPrefs::load(&settings.data_dir).unwrap_or_default();
+    Ok(activity_settings_from_prefs(&prefs))
+}
+
+#[uniffi::export]
+pub fn piya_save_activity_settings(
+    mode: String,
+    retention_days: u32,
+    excluded_apps: Vec<String>,
+) -> Result<FfiActivitySettings, PiyaError> {
+    let settings = load_settings()?;
+    let mut prefs = crate::prefs::UserPrefs::load(&settings.data_dir).unwrap_or_default();
+    prefs.activity_mode = crate::activity::normalize_mode(&mode).to_string();
+    prefs.activity_retention_days = retention_days;
+    prefs.activity_excluded_apps = excluded_apps
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if prefs.activity_mode != "off" && prefs.activity_paused_until > 0 {
+        // Leave timed pause intact unless user explicitly resumed; no-op here.
+    }
+    prefs.save(&settings.data_dir).map_err(map_err)?;
+    if let Ok(conn) = crate::db::open(&settings.data_dir) {
+        let _ = crate::activity::prune_old_events(&conn, prefs.activity_retention_days);
+    }
+    Ok(activity_settings_from_prefs(&prefs))
+}
+
+/// Pause activity capture for `minutes` (`0` resumes immediately).
+#[uniffi::export]
+pub fn piya_pause_activity(minutes: u32) -> Result<FfiActivitySettings, PiyaError> {
+    let settings = load_settings()?;
+    let mut prefs = crate::prefs::UserPrefs::load(&settings.data_dir).unwrap_or_default();
+    if minutes == 0 {
+        prefs.activity_paused_until = 0;
+    } else {
+        prefs.activity_paused_until = chrono::Utc::now().timestamp() + (minutes as i64) * 60;
+    }
+    prefs.save(&settings.data_dir).map_err(map_err)?;
+    Ok(activity_settings_from_prefs(&prefs))
+}
+
+#[uniffi::export]
+pub fn piya_record_activity(
+    app_name: String,
+    bundle_id: String,
+    window_title: String,
+    url_or_path: String,
+    screen_text: String,
+    capture_kind: String,
+) -> Result<bool, PiyaError> {
+    let settings = load_settings()?;
+    let prefs = crate::prefs::UserPrefs::load(&settings.data_dir).unwrap_or_default();
+    let conn = crate::db::open(&settings.data_dir).map_err(map_err)?;
+    crate::activity::record_snapshot(
+        &conn,
+        &prefs,
+        crate::activity::ActivitySnapshotInput {
+            app_name,
+            bundle_id,
+            window_title,
+            url_or_path,
+            screen_text,
+            capture_kind,
+            timestamp: None,
+        },
+    )
+    .map_err(map_err)
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiActivityEvent {
+    pub id: i64,
+    pub started_at: i64,
+    pub ended_at: i64,
+    pub duration_sec: i64,
+    pub app_name: String,
+    pub bundle_id: String,
+    pub window_title: String,
+    pub url_or_path: String,
+    pub capture_mode: String,
+    pub screen_text: String,
+}
+
+fn event_to_ffi(e: crate::activity::ActivityEvent) -> FfiActivityEvent {
+    FfiActivityEvent {
+        id: e.id,
+        started_at: e.started_at,
+        ended_at: e.ended_at,
+        duration_sec: e.duration_sec,
+        app_name: e.app_name,
+        bundle_id: e.bundle_id,
+        window_title: e.window_title,
+        url_or_path: e.url_or_path,
+        capture_mode: e.capture_mode,
+        screen_text: e.screen_text,
+    }
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiAppUsageStat {
+    pub app_name: String,
+    pub bundle_id: String,
+    pub seconds: i64,
+    pub top_window: String,
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiActivityToday {
+    pub day: String,
+    pub total_active_sec: i64,
+    pub summary: String,
+    pub top_apps: Vec<FfiAppUsageStat>,
+    pub recent_events: Vec<FfiActivityEvent>,
+}
+
+#[uniffi::export]
+pub fn piya_get_activity_today(limit: u32) -> Result<FfiActivityToday, PiyaError> {
+    let settings = load_settings()?;
+    let conn = crate::db::open(&settings.data_dir).map_err(map_err)?;
+    let today = chrono::Local::now().date_naive();
+    let day_summary = crate::activity::get_day_summary(&conn, today).map_err(map_err)?;
+    let (start, end) = crate::activity::local_day_bounds(today);
+    let lim = if limit == 0 { 50 } else { limit as usize };
+    let events = crate::activity::list_events_between(&conn, start, end, lim).map_err(map_err)?;
+    Ok(FfiActivityToday {
+        day: day_summary.day,
+        total_active_sec: day_summary.total_active_sec,
+        summary: day_summary.summary,
+        top_apps: day_summary
+            .top_apps
+            .into_iter()
+            .map(|s| FfiAppUsageStat {
+                app_name: s.app_name,
+                bundle_id: s.bundle_id,
+                seconds: s.seconds,
+                top_window: s.top_window,
+            })
+            .collect(),
+        recent_events: events.into_iter().map(event_to_ffi).collect(),
+    })
+}
+
+#[uniffi::export]
+pub fn piya_search_activity(query: String, limit: u32) -> Result<Vec<FfiActivityEvent>, PiyaError> {
+    let settings = load_settings()?;
+    let conn = crate::db::open(&settings.data_dir).map_err(map_err)?;
+    let lim = if limit == 0 { 30 } else { limit as usize };
+    let hits = crate::activity::search_events(&conn, &query, None, None, lim).map_err(map_err)?;
+    Ok(hits.into_iter().map(event_to_ffi).collect())
+}
+
+#[uniffi::export]
+pub fn piya_delete_activity_event(id: i64) -> Result<(), PiyaError> {
+    let settings = load_settings()?;
+    let conn = crate::db::open(&settings.data_dir).map_err(map_err)?;
+    crate::activity::delete_event(&conn, id).map_err(map_err)
+}
+
+#[uniffi::export]
+pub fn piya_clear_activity(today_only: bool) -> Result<u32, PiyaError> {
+    let settings = load_settings()?;
+    let conn = crate::db::open(&settings.data_dir).map_err(map_err)?;
+    let deleted = crate::activity::clear_activity(&conn, today_only).map_err(map_err)?;
+    Ok(deleted as u32)
+}

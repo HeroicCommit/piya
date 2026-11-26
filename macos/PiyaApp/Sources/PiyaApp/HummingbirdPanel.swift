@@ -25,6 +25,8 @@ final class HummingbirdPanelController: NSObject, NSWindowDelegate {
     }
 
     func show() {
+        // Capture whatever window the user was just looking at BEFORE Piya takes focus!
+        ActivityObserver.shared.captureBeforePanelOpen()
         if window == nil {
             buildWindow()
         }

@@ -495,6 +495,328 @@ fileprivate struct FfiConverterString: FfiConverter {
 }
 
 
+public struct FfiActivityEvent {
+    public var id: Int64
+    public var startedAt: Int64
+    public var endedAt: Int64
+    public var durationSec: Int64
+    public var appName: String
+    public var bundleId: String
+    public var windowTitle: String
+    public var urlOrPath: String
+    public var captureMode: String
+    public var screenText: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: Int64, startedAt: Int64, endedAt: Int64, durationSec: Int64, appName: String, bundleId: String, windowTitle: String, urlOrPath: String, captureMode: String, screenText: String) {
+        self.id = id
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+        self.durationSec = durationSec
+        self.appName = appName
+        self.bundleId = bundleId
+        self.windowTitle = windowTitle
+        self.urlOrPath = urlOrPath
+        self.captureMode = captureMode
+        self.screenText = screenText
+    }
+}
+
+#if compiler(>=6)
+extension FfiActivityEvent: Sendable {}
+#endif
+
+
+extension FfiActivityEvent: Equatable, Hashable {
+    public static func ==(lhs: FfiActivityEvent, rhs: FfiActivityEvent) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.startedAt != rhs.startedAt {
+            return false
+        }
+        if lhs.endedAt != rhs.endedAt {
+            return false
+        }
+        if lhs.durationSec != rhs.durationSec {
+            return false
+        }
+        if lhs.appName != rhs.appName {
+            return false
+        }
+        if lhs.bundleId != rhs.bundleId {
+            return false
+        }
+        if lhs.windowTitle != rhs.windowTitle {
+            return false
+        }
+        if lhs.urlOrPath != rhs.urlOrPath {
+            return false
+        }
+        if lhs.captureMode != rhs.captureMode {
+            return false
+        }
+        if lhs.screenText != rhs.screenText {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(startedAt)
+        hasher.combine(endedAt)
+        hasher.combine(durationSec)
+        hasher.combine(appName)
+        hasher.combine(bundleId)
+        hasher.combine(windowTitle)
+        hasher.combine(urlOrPath)
+        hasher.combine(captureMode)
+        hasher.combine(screenText)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiActivityEvent: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiActivityEvent {
+        return
+            try FfiActivityEvent(
+                id: FfiConverterInt64.read(from: &buf), 
+                startedAt: FfiConverterInt64.read(from: &buf), 
+                endedAt: FfiConverterInt64.read(from: &buf), 
+                durationSec: FfiConverterInt64.read(from: &buf), 
+                appName: FfiConverterString.read(from: &buf), 
+                bundleId: FfiConverterString.read(from: &buf), 
+                windowTitle: FfiConverterString.read(from: &buf), 
+                urlOrPath: FfiConverterString.read(from: &buf), 
+                captureMode: FfiConverterString.read(from: &buf), 
+                screenText: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiActivityEvent, into buf: inout [UInt8]) {
+        FfiConverterInt64.write(value.id, into: &buf)
+        FfiConverterInt64.write(value.startedAt, into: &buf)
+        FfiConverterInt64.write(value.endedAt, into: &buf)
+        FfiConverterInt64.write(value.durationSec, into: &buf)
+        FfiConverterString.write(value.appName, into: &buf)
+        FfiConverterString.write(value.bundleId, into: &buf)
+        FfiConverterString.write(value.windowTitle, into: &buf)
+        FfiConverterString.write(value.urlOrPath, into: &buf)
+        FfiConverterString.write(value.captureMode, into: &buf)
+        FfiConverterString.write(value.screenText, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiActivityEvent_lift(_ buf: RustBuffer) throws -> FfiActivityEvent {
+    return try FfiConverterTypeFfiActivityEvent.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiActivityEvent_lower(_ value: FfiActivityEvent) -> RustBuffer {
+    return FfiConverterTypeFfiActivityEvent.lower(value)
+}
+
+
+public struct FfiActivitySettings {
+    public var mode: String
+    public var pausedUntil: Int64
+    public var isPaused: Bool
+    public var excludedApps: [String]
+    public var retentionDays: UInt32
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(mode: String, pausedUntil: Int64, isPaused: Bool, excludedApps: [String], retentionDays: UInt32) {
+        self.mode = mode
+        self.pausedUntil = pausedUntil
+        self.isPaused = isPaused
+        self.excludedApps = excludedApps
+        self.retentionDays = retentionDays
+    }
+}
+
+#if compiler(>=6)
+extension FfiActivitySettings: Sendable {}
+#endif
+
+
+extension FfiActivitySettings: Equatable, Hashable {
+    public static func ==(lhs: FfiActivitySettings, rhs: FfiActivitySettings) -> Bool {
+        if lhs.mode != rhs.mode {
+            return false
+        }
+        if lhs.pausedUntil != rhs.pausedUntil {
+            return false
+        }
+        if lhs.isPaused != rhs.isPaused {
+            return false
+        }
+        if lhs.excludedApps != rhs.excludedApps {
+            return false
+        }
+        if lhs.retentionDays != rhs.retentionDays {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(mode)
+        hasher.combine(pausedUntil)
+        hasher.combine(isPaused)
+        hasher.combine(excludedApps)
+        hasher.combine(retentionDays)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiActivitySettings: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiActivitySettings {
+        return
+            try FfiActivitySettings(
+                mode: FfiConverterString.read(from: &buf), 
+                pausedUntil: FfiConverterInt64.read(from: &buf), 
+                isPaused: FfiConverterBool.read(from: &buf), 
+                excludedApps: FfiConverterSequenceString.read(from: &buf), 
+                retentionDays: FfiConverterUInt32.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiActivitySettings, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.mode, into: &buf)
+        FfiConverterInt64.write(value.pausedUntil, into: &buf)
+        FfiConverterBool.write(value.isPaused, into: &buf)
+        FfiConverterSequenceString.write(value.excludedApps, into: &buf)
+        FfiConverterUInt32.write(value.retentionDays, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiActivitySettings_lift(_ buf: RustBuffer) throws -> FfiActivitySettings {
+    return try FfiConverterTypeFfiActivitySettings.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiActivitySettings_lower(_ value: FfiActivitySettings) -> RustBuffer {
+    return FfiConverterTypeFfiActivitySettings.lower(value)
+}
+
+
+public struct FfiActivityToday {
+    public var day: String
+    public var totalActiveSec: Int64
+    public var summary: String
+    public var topApps: [FfiAppUsageStat]
+    public var recentEvents: [FfiActivityEvent]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(day: String, totalActiveSec: Int64, summary: String, topApps: [FfiAppUsageStat], recentEvents: [FfiActivityEvent]) {
+        self.day = day
+        self.totalActiveSec = totalActiveSec
+        self.summary = summary
+        self.topApps = topApps
+        self.recentEvents = recentEvents
+    }
+}
+
+#if compiler(>=6)
+extension FfiActivityToday: Sendable {}
+#endif
+
+
+extension FfiActivityToday: Equatable, Hashable {
+    public static func ==(lhs: FfiActivityToday, rhs: FfiActivityToday) -> Bool {
+        if lhs.day != rhs.day {
+            return false
+        }
+        if lhs.totalActiveSec != rhs.totalActiveSec {
+            return false
+        }
+        if lhs.summary != rhs.summary {
+            return false
+        }
+        if lhs.topApps != rhs.topApps {
+            return false
+        }
+        if lhs.recentEvents != rhs.recentEvents {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(day)
+        hasher.combine(totalActiveSec)
+        hasher.combine(summary)
+        hasher.combine(topApps)
+        hasher.combine(recentEvents)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiActivityToday: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiActivityToday {
+        return
+            try FfiActivityToday(
+                day: FfiConverterString.read(from: &buf), 
+                totalActiveSec: FfiConverterInt64.read(from: &buf), 
+                summary: FfiConverterString.read(from: &buf), 
+                topApps: FfiConverterSequenceTypeFfiAppUsageStat.read(from: &buf), 
+                recentEvents: FfiConverterSequenceTypeFfiActivityEvent.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiActivityToday, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.day, into: &buf)
+        FfiConverterInt64.write(value.totalActiveSec, into: &buf)
+        FfiConverterString.write(value.summary, into: &buf)
+        FfiConverterSequenceTypeFfiAppUsageStat.write(value.topApps, into: &buf)
+        FfiConverterSequenceTypeFfiActivityEvent.write(value.recentEvents, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiActivityToday_lift(_ buf: RustBuffer) throws -> FfiActivityToday {
+    return try FfiConverterTypeFfiActivityToday.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiActivityToday_lower(_ value: FfiActivityToday) -> RustBuffer {
+    return FfiConverterTypeFfiActivityToday.lower(value)
+}
+
+
 public struct FfiAppEnvSettings {
     public var notify: String
     public var shellPolicy: String
@@ -562,6 +884,92 @@ public func FfiConverterTypeFfiAppEnvSettings_lift(_ buf: RustBuffer) throws -> 
 #endif
 public func FfiConverterTypeFfiAppEnvSettings_lower(_ value: FfiAppEnvSettings) -> RustBuffer {
     return FfiConverterTypeFfiAppEnvSettings.lower(value)
+}
+
+
+public struct FfiAppUsageStat {
+    public var appName: String
+    public var bundleId: String
+    public var seconds: Int64
+    public var topWindow: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(appName: String, bundleId: String, seconds: Int64, topWindow: String) {
+        self.appName = appName
+        self.bundleId = bundleId
+        self.seconds = seconds
+        self.topWindow = topWindow
+    }
+}
+
+#if compiler(>=6)
+extension FfiAppUsageStat: Sendable {}
+#endif
+
+
+extension FfiAppUsageStat: Equatable, Hashable {
+    public static func ==(lhs: FfiAppUsageStat, rhs: FfiAppUsageStat) -> Bool {
+        if lhs.appName != rhs.appName {
+            return false
+        }
+        if lhs.bundleId != rhs.bundleId {
+            return false
+        }
+        if lhs.seconds != rhs.seconds {
+            return false
+        }
+        if lhs.topWindow != rhs.topWindow {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(appName)
+        hasher.combine(bundleId)
+        hasher.combine(seconds)
+        hasher.combine(topWindow)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiAppUsageStat: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiAppUsageStat {
+        return
+            try FfiAppUsageStat(
+                appName: FfiConverterString.read(from: &buf), 
+                bundleId: FfiConverterString.read(from: &buf), 
+                seconds: FfiConverterInt64.read(from: &buf), 
+                topWindow: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiAppUsageStat, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.appName, into: &buf)
+        FfiConverterString.write(value.bundleId, into: &buf)
+        FfiConverterInt64.write(value.seconds, into: &buf)
+        FfiConverterString.write(value.topWindow, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAppUsageStat_lift(_ buf: RustBuffer) throws -> FfiAppUsageStat {
+    return try FfiConverterTypeFfiAppUsageStat.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAppUsageStat_lower(_ value: FfiAppUsageStat) -> RustBuffer {
+    return FfiConverterTypeFfiAppUsageStat.lower(value)
 }
 
 
@@ -2507,6 +2915,56 @@ fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeFfiActivityEvent: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiActivityEvent]
+
+    public static func write(_ value: [FfiActivityEvent], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiActivityEvent.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiActivityEvent] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiActivityEvent]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiActivityEvent.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeFfiAppUsageStat: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiAppUsageStat]
+
+    public static func write(_ value: [FfiAppUsageStat], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiAppUsageStat.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiAppUsageStat] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiAppUsageStat]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiAppUsageStat.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeFfiAttachment: FfiConverterRustBuffer {
     typealias SwiftType = [FfiAttachment]
 
@@ -2832,6 +3290,13 @@ public func piyaCheckForUpdate()throws  -> FfiUpdateCheck  {
     )
 })
 }
+public func piyaClearActivity(todayOnly: Bool)throws  -> UInt32  {
+    return try  FfiConverterUInt32.lift(try rustCallWithError(FfiConverterTypePiyaError_lift) {
+    uniffi_piya_fn_func_piya_clear_activity(
+        FfiConverterBool.lower(todayOnly),$0
+    )
+})
+}
 public func piyaConfirmNote(id: String)throws  -> FfiNote  {
     return try  FfiConverterTypeFfiNote_lift(try rustCallWithError(FfiConverterTypePiyaError_lift) {
     uniffi_piya_fn_func_piya_confirm_note(
@@ -2851,6 +3316,12 @@ public func piyaDataDir()throws  -> String  {
     uniffi_piya_fn_func_piya_data_dir($0
     )
 })
+}
+public func piyaDeleteActivityEvent(id: Int64)throws   {try rustCallWithError(FfiConverterTypePiyaError_lift) {
+    uniffi_piya_fn_func_piya_delete_activity_event(
+        FfiConverterInt64.lower(id),$0
+    )
+}
 }
 public func piyaDeleteChatSession(id: String)throws   {try rustCallWithError(FfiConverterTypePiyaError_lift) {
     uniffi_piya_fn_func_piya_delete_chat_session(
@@ -2881,6 +3352,19 @@ public func piyaForgetNote(id: String)throws   {try rustCallWithError(FfiConvert
         FfiConverterString.lower(id),$0
     )
 }
+}
+public func piyaGetActivitySettings()throws  -> FfiActivitySettings  {
+    return try  FfiConverterTypeFfiActivitySettings_lift(try rustCallWithError(FfiConverterTypePiyaError_lift) {
+    uniffi_piya_fn_func_piya_get_activity_settings($0
+    )
+})
+}
+public func piyaGetActivityToday(limit: UInt32)throws  -> FfiActivityToday  {
+    return try  FfiConverterTypeFfiActivityToday_lift(try rustCallWithError(FfiConverterTypePiyaError_lift) {
+    uniffi_piya_fn_func_piya_get_activity_today(
+        FfiConverterUInt32.lower(limit),$0
+    )
+})
 }
 public func piyaGetAppEnvSettings()throws  -> FfiAppEnvSettings  {
     return try  FfiConverterTypeFfiAppEnvSettings_lift(try rustCallWithError(FfiConverterTypePiyaError_lift) {
@@ -2985,9 +3469,31 @@ public func piyaLoadChatSession()throws  -> FfiChatSession  {
     )
 })
 }
+/**
+ * Pause activity capture for `minutes` (`0` resumes immediately).
+ */
+public func piyaPauseActivity(minutes: UInt32)throws  -> FfiActivitySettings  {
+    return try  FfiConverterTypeFfiActivitySettings_lift(try rustCallWithError(FfiConverterTypePiyaError_lift) {
+    uniffi_piya_fn_func_piya_pause_activity(
+        FfiConverterUInt32.lower(minutes),$0
+    )
+})
+}
 public func piyaQueueSummary()throws  -> FfiQueueSummary  {
     return try  FfiConverterTypeFfiQueueSummary_lift(try rustCallWithError(FfiConverterTypePiyaError_lift) {
     uniffi_piya_fn_func_piya_queue_summary($0
+    )
+})
+}
+public func piyaRecordActivity(appName: String, bundleId: String, windowTitle: String, urlOrPath: String, screenText: String, captureKind: String)throws  -> Bool  {
+    return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypePiyaError_lift) {
+    uniffi_piya_fn_func_piya_record_activity(
+        FfiConverterString.lower(appName),
+        FfiConverterString.lower(bundleId),
+        FfiConverterString.lower(windowTitle),
+        FfiConverterString.lower(urlOrPath),
+        FfiConverterString.lower(screenText),
+        FfiConverterString.lower(captureKind),$0
     )
 })
 }
@@ -3003,6 +3509,15 @@ public func piyaRunReflection(force: Bool)throws  -> String  {
     return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypePiyaError_lift) {
     uniffi_piya_fn_func_piya_run_reflection(
         FfiConverterBool.lower(force),$0
+    )
+})
+}
+public func piyaSaveActivitySettings(mode: String, retentionDays: UInt32, excludedApps: [String])throws  -> FfiActivitySettings  {
+    return try  FfiConverterTypeFfiActivitySettings_lift(try rustCallWithError(FfiConverterTypePiyaError_lift) {
+    uniffi_piya_fn_func_piya_save_activity_settings(
+        FfiConverterString.lower(mode),
+        FfiConverterUInt32.lower(retentionDays),
+        FfiConverterSequenceString.lower(excludedApps),$0
     )
 })
 }
@@ -3055,6 +3570,14 @@ public func piyaSaveUserPrefs(prefs: FfiUserPrefs)throws   {try rustCallWithErro
         FfiConverterTypeFfiUserPrefs_lower(prefs),$0
     )
 }
+}
+public func piyaSearchActivity(query: String, limit: UInt32)throws  -> [FfiActivityEvent]  {
+    return try  FfiConverterSequenceTypeFfiActivityEvent.lift(try rustCallWithError(FfiConverterTypePiyaError_lift) {
+    uniffi_piya_fn_func_piya_search_activity(
+        FfiConverterString.lower(query),
+        FfiConverterUInt32.lower(limit),$0
+    )
+})
 }
 public func piyaSelectChatSession(id: String)throws   {try rustCallWithError(FfiConverterTypePiyaError_lift) {
     uniffi_piya_fn_func_piya_select_chat_session(
@@ -3202,6 +3725,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_piya_checksum_func_piya_check_for_update() != 56684) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_piya_checksum_func_piya_clear_activity() != 55414) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_piya_checksum_func_piya_confirm_note() != 14863) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -3209,6 +3735,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_piya_checksum_func_piya_data_dir() != 41324) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_piya_checksum_func_piya_delete_activity_event() != 34168) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_piya_checksum_func_piya_delete_chat_session() != 46831) {
@@ -3224,6 +3753,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_piya_checksum_func_piya_forget_note() != 15639) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_piya_checksum_func_piya_get_activity_settings() != 36529) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_piya_checksum_func_piya_get_activity_today() != 58046) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_piya_checksum_func_piya_get_app_env_settings() != 10851) {
@@ -3268,13 +3803,22 @@ private let initializationResult: InitializationResult = {
     if (uniffi_piya_checksum_func_piya_load_chat_session() != 10471) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_piya_checksum_func_piya_pause_activity() != 6702) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_piya_checksum_func_piya_queue_summary() != 55962) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_piya_checksum_func_piya_record_activity() != 30992) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_piya_checksum_func_piya_run_pending_tasks() != 20878) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_piya_checksum_func_piya_run_reflection() != 38526) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_piya_checksum_func_piya_save_activity_settings() != 14831) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_piya_checksum_func_piya_save_app_env_settings() != 22037) {
@@ -3296,6 +3840,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_piya_checksum_func_piya_save_user_prefs() != 30124) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_piya_checksum_func_piya_search_activity() != 8063) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_piya_checksum_func_piya_select_chat_session() != 46941) {

@@ -291,6 +291,11 @@ RustBuffer uniffi_piya_fn_func_piya_check_for_update(RustCallStatus *_Nonnull ou
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_CLEAR_ACTIVITY
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_CLEAR_ACTIVITY
+uint32_t uniffi_piya_fn_func_piya_clear_activity(int8_t today_only, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_CONFIRM_NOTE
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_CONFIRM_NOTE
 RustBuffer uniffi_piya_fn_func_piya_confirm_note(RustBuffer id, RustCallStatus *_Nonnull out_status
@@ -305,6 +310,11 @@ RustBuffer uniffi_piya_fn_func_piya_create_chat_session(RustBuffer mode, RustCal
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_DATA_DIR
 RustBuffer uniffi_piya_fn_func_piya_data_dir(RustCallStatus *_Nonnull out_status
     
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_DELETE_ACTIVITY_EVENT
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_DELETE_ACTIVITY_EVENT
+void uniffi_piya_fn_func_piya_delete_activity_event(int64_t id, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_DELETE_CHAT_SESSION
@@ -331,6 +341,17 @@ RustBuffer uniffi_piya_fn_func_piya_export_memory_markdown(RustCallStatus *_Nonn
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_FORGET_NOTE
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_FORGET_NOTE
 void uniffi_piya_fn_func_piya_forget_note(RustBuffer id, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_GET_ACTIVITY_SETTINGS
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_GET_ACTIVITY_SETTINGS
+RustBuffer uniffi_piya_fn_func_piya_get_activity_settings(RustCallStatus *_Nonnull out_status
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_GET_ACTIVITY_TODAY
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_GET_ACTIVITY_TODAY
+RustBuffer uniffi_piya_fn_func_piya_get_activity_today(uint32_t limit, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_GET_APP_ENV_SETTINGS
@@ -413,10 +434,20 @@ RustBuffer uniffi_piya_fn_func_piya_load_chat_session(RustCallStatus *_Nonnull o
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_PAUSE_ACTIVITY
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_PAUSE_ACTIVITY
+RustBuffer uniffi_piya_fn_func_piya_pause_activity(uint32_t minutes, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_QUEUE_SUMMARY
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_QUEUE_SUMMARY
 RustBuffer uniffi_piya_fn_func_piya_queue_summary(RustCallStatus *_Nonnull out_status
     
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_RECORD_ACTIVITY
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_RECORD_ACTIVITY
+int8_t uniffi_piya_fn_func_piya_record_activity(RustBuffer app_name, RustBuffer bundle_id, RustBuffer window_title, RustBuffer url_or_path, RustBuffer screen_text, RustBuffer capture_kind, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_RUN_PENDING_TASKS
@@ -428,6 +459,11 @@ void uniffi_piya_fn_func_piya_run_pending_tasks(RustCallStatus *_Nonnull out_sta
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_RUN_REFLECTION
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_RUN_REFLECTION
 RustBuffer uniffi_piya_fn_func_piya_run_reflection(int8_t force, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_SAVE_ACTIVITY_SETTINGS
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_SAVE_ACTIVITY_SETTINGS
+RustBuffer uniffi_piya_fn_func_piya_save_activity_settings(RustBuffer mode, uint32_t retention_days, RustBuffer excluded_apps, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_SAVE_APP_ENV_SETTINGS
@@ -463,6 +499,11 @@ RustBuffer uniffi_piya_fn_func_piya_save_skill(RustBuffer name, RustBuffer descr
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_SAVE_USER_PREFS
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_SAVE_USER_PREFS
 void uniffi_piya_fn_func_piya_save_user_prefs(RustBuffer prefs, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_SEARCH_ACTIVITY
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_SEARCH_ACTIVITY
+RustBuffer uniffi_piya_fn_func_piya_search_activity(RustBuffer query, uint32_t limit, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_SELECT_CHAT_SESSION
@@ -850,6 +891,12 @@ uint16_t uniffi_piya_checksum_func_piya_check_for_update(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_CLEAR_ACTIVITY
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_CLEAR_ACTIVITY
+uint16_t uniffi_piya_checksum_func_piya_clear_activity(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_CONFIRM_NOTE
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_CONFIRM_NOTE
 uint16_t uniffi_piya_checksum_func_piya_confirm_note(void
@@ -865,6 +912,12 @@ uint16_t uniffi_piya_checksum_func_piya_create_chat_session(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_DATA_DIR
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_DATA_DIR
 uint16_t uniffi_piya_checksum_func_piya_data_dir(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_DELETE_ACTIVITY_EVENT
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_DELETE_ACTIVITY_EVENT
+uint16_t uniffi_piya_checksum_func_piya_delete_activity_event(void
     
 );
 #endif
@@ -895,6 +948,18 @@ uint16_t uniffi_piya_checksum_func_piya_export_memory_markdown(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_FORGET_NOTE
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_FORGET_NOTE
 uint16_t uniffi_piya_checksum_func_piya_forget_note(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_GET_ACTIVITY_SETTINGS
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_GET_ACTIVITY_SETTINGS
+uint16_t uniffi_piya_checksum_func_piya_get_activity_settings(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_GET_ACTIVITY_TODAY
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_GET_ACTIVITY_TODAY
+uint16_t uniffi_piya_checksum_func_piya_get_activity_today(void
     
 );
 #endif
@@ -982,9 +1047,21 @@ uint16_t uniffi_piya_checksum_func_piya_load_chat_session(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_PAUSE_ACTIVITY
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_PAUSE_ACTIVITY
+uint16_t uniffi_piya_checksum_func_piya_pause_activity(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_QUEUE_SUMMARY
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_QUEUE_SUMMARY
 uint16_t uniffi_piya_checksum_func_piya_queue_summary(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_RECORD_ACTIVITY
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_RECORD_ACTIVITY
+uint16_t uniffi_piya_checksum_func_piya_record_activity(void
     
 );
 #endif
@@ -997,6 +1074,12 @@ uint16_t uniffi_piya_checksum_func_piya_run_pending_tasks(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_RUN_REFLECTION
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_RUN_REFLECTION
 uint16_t uniffi_piya_checksum_func_piya_run_reflection(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_SAVE_ACTIVITY_SETTINGS
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_SAVE_ACTIVITY_SETTINGS
+uint16_t uniffi_piya_checksum_func_piya_save_activity_settings(void
     
 );
 #endif
@@ -1039,6 +1122,12 @@ uint16_t uniffi_piya_checksum_func_piya_save_skill(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_SAVE_USER_PREFS
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_SAVE_USER_PREFS
 uint16_t uniffi_piya_checksum_func_piya_save_user_prefs(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_SEARCH_ACTIVITY
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_SEARCH_ACTIVITY
+uint16_t uniffi_piya_checksum_func_piya_search_activity(void
     
 );
 #endif

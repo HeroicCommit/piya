@@ -340,6 +340,70 @@ enum PiyaBackend {
         return try piyaExportMemoryMarkdown()
     }
 
+    // MARK: Desktop Activity Tracking
+
+    static func activitySettings() throws -> FfiActivitySettings {
+        bootstrap()
+        return try piyaGetActivitySettings()
+    }
+
+    static func saveActivitySettings(
+        mode: String,
+        retentionDays: UInt32,
+        excludedApps: [String]
+    ) throws -> FfiActivitySettings {
+        bootstrap()
+        return try piyaSaveActivitySettings(
+            mode: mode,
+            retentionDays: retentionDays,
+            excludedApps: excludedApps
+        )
+    }
+
+    static func pauseActivity(minutes: UInt32) throws -> FfiActivitySettings {
+        bootstrap()
+        return try piyaPauseActivity(minutes: minutes)
+    }
+
+    static func recordActivity(
+        appName: String,
+        bundleId: String,
+        windowTitle: String,
+        urlOrPath: String,
+        screenText: String,
+        captureKind: String
+    ) throws -> Bool {
+        bootstrap()
+        return try piyaRecordActivity(
+            appName: appName,
+            bundleId: bundleId,
+            windowTitle: windowTitle,
+            urlOrPath: urlOrPath,
+            screenText: screenText,
+            captureKind: captureKind
+        )
+    }
+
+    static func activityToday(limit: UInt32 = 40) throws -> FfiActivityToday {
+        bootstrap()
+        return try piyaGetActivityToday(limit: limit)
+    }
+
+    static func searchActivity(query: String, limit: UInt32 = 30) throws -> [FfiActivityEvent] {
+        bootstrap()
+        return try piyaSearchActivity(query: query, limit: limit)
+    }
+
+    static func deleteActivityEvent(id: Int64) throws {
+        bootstrap()
+        try piyaDeleteActivityEvent(id: id)
+    }
+
+    static func clearActivity(todayOnly: Bool) throws -> UInt32 {
+        bootstrap()
+        return try piyaClearActivity(todayOnly: todayOnly)
+    }
+
     static func checkForUpdate() throws -> FfiUpdateCheck {
         bootstrap()
         return try piyaCheckForUpdate()

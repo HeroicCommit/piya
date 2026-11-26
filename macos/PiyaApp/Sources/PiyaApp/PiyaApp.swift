@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         TaskNotificationWatcher.shared.start()
         DueTaskScheduler.shared.start()
         Task { @MainActor in
+            ActivityObserver.shared.start()
             UpdateController.shared.startBackgroundChecks()
         }
         if CommandLine.arguments.contains("--open-chat") {
@@ -87,6 +88,7 @@ private struct CheckForUpdatesMenuButton: View {
 @main
 struct PiyaApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @ObservedObject private var activity = ActivityObserver.shared
 
     var body: some Scene {
         MenuBarExtra {
@@ -94,6 +96,30 @@ struct PiyaApp: App {
                 HummingbirdPanelController.shared.show()
             }
             .keyboardShortcut(" ", modifiers: [.control, .command])
+
+            Divider()
+
+            if activity.settings.mode == "off" {
+                Button("Activity Tracking: Off") {
+                    UpdateController.shared.selectedSettingsTab = .activity
+                }
+                .disabled(true)
+            } else if activity.settings.isPaused {
+                Button("Resume Activity Tracking") {
+                    activity.pause(minutes: 0)
+                }
+            } else {
+                Menu("Activity Tracking: On (\(Self.modeLabel(activity.settings.mode)))") {
+                    Button("Pause for 1 Hour") {
+                        activity.pause(minutes: 60)
+                    }
+                    Button("Pause for Rest of Today") {
+                        activity.pause(minutes: 12 * 60)
+                    }
+                }
+            }
+
+            Divider()
 
             SettingsMenuButton()
             CheckForUpdatesMenuButton()
@@ -110,6 +136,14 @@ struct PiyaApp: App {
 
         Settings {
             SettingsView()
+        }
+    }
+
+    private static func modeLabel(_ raw: String) -> String {
+        switch raw {
+        case "full": return "Full"
+        case "app_only": return "App Only"
+        default: return "Text Only"
         }
     }
 

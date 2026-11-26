@@ -70,6 +70,17 @@ Everything lives in **one SQLite database (`data/piya.db`, WAL mode)** so Piya r
 3. **Daily Reflection & Reasoned Opinions:** Once per day (`piya reflect` or **Settings → Memory → Reflect Now**), Piya repairs expired/duplicate notes, extracts tentative learnings from recent chats (`tentative` → promoted to `learned` when repeated), and can form revisable technical/workflow `opinions`.
 4. **Learned Procedural Skills:** Reusable multi-step procedures (`piya_skill_save` / `piya_skill_read` / `piya_skill_patch`) are indexed on every turn. Editing a skill in **Settings → Memory → Skills** locks it so Piya asks before overwriting it.
 
+### Desktop Activity & Work Context (Littlebird-style, 100% Local)
+
+Piya passively tracks what you are working on across macOS apps so you never have to brief her from scratch (`Settings → Activity` or `piya activity`):
+
+- **Capture modes (`Settings → Activity`):**
+  - **Full:** Active apps, window titles, browser URLs / document paths + Accessibility text + on-device Apple Vision OCR (`VNRecognizeTextRequest`) for canvases/PDFs (screenshots are discarded immediately).
+  - **Text Only *(default)*:** Active apps, window titles, URLs/paths, and visible Accessibility text — zero screenshots or OCR.
+  - **App Activity Only:** Only app names, window titles, URLs/paths, and active duration — never reads window body text.
+  - **Off** (plus **Pause for 1 Hour / Pause for Rest of Today / Resume** right in the menu bar).
+- **Privacy & Retention:** Automatically skips password managers (**1Password**, **Apple Passwords**, **Keychain Access**, **Bitwarden**), `AXSecureTextField` password inputs, and **Private / Incognito** browser windows; scrubs API keys and card numbers; prunes detailed window logs after **30 days** (configurable) while keeping compact daily rollups (`activity_rollups`) long-term. Never creates unsolicited tasks from observed screen content.
+
 ### Notifications
 
 Normal notifications are Notification Center banners. **Major alerts** open a panel in the middle of the screen that

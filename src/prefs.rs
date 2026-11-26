@@ -19,6 +19,18 @@ pub struct UserPrefs {
     /// Allow saving sensitive topics and developing reasoned opinions from discussions.
     #[serde(default = "default_true")]
     pub remember_sensitive: bool,
+    /// Desktop activity capture mode: `full` | `text_only` | `app_only` | `off`.
+    #[serde(default = "default_activity_mode")]
+    pub activity_mode: String,
+    /// Unix timestamp (seconds) until which activity capture is paused (`0` = active).
+    #[serde(default)]
+    pub activity_paused_until: i64,
+    /// User-specified app names or bundle IDs excluded from activity tracking.
+    #[serde(default)]
+    pub activity_excluded_apps: Vec<String>,
+    /// Days to retain detailed window-by-window `activity_events` (`0` = indefinitely).
+    #[serde(default = "default_retention_days")]
+    pub activity_retention_days: u32,
     /// Stub: morning digest preference (scheduling not wired yet).
     #[serde(default)]
     pub digest_enabled: bool,
@@ -29,6 +41,14 @@ pub struct UserPrefs {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_activity_mode() -> String {
+    "text_only".to_string()
+}
+
+fn default_retention_days() -> u32 {
+    30
 }
 
 fn default_digest_hour() -> u32 {
@@ -42,6 +62,10 @@ impl Default for UserPrefs {
             auto_capture_prefs: true,
             learn_from_conversations: true,
             remember_sensitive: true,
+            activity_mode: default_activity_mode(),
+            activity_paused_until: 0,
+            activity_excluded_apps: Vec::new(),
+            activity_retention_days: default_retention_days(),
             digest_enabled: false,
             digest_hour: default_digest_hour(),
         }
