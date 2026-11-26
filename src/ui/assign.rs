@@ -63,18 +63,33 @@ pub fn search_memory(settings: &Settings, query: &str) -> Result<String> {
     let settings = settings.clone();
     let query = query.trim().to_string();
     crate::runtime::block_on(async move {
-        let (_llm, memory) = crate::chat_engine::llm_and_memory(&settings)?;
-        let hits = memory
-            .recall(&query, crate::memory::RecallOpts::search(8))
-            .await?;
-        if hits.is_empty() {
+        let mut lines: Vec<String> = Vec::new();
+        if let Ok(conn) = crate::db::open(&settings.data_dir) {
+            if let Ok(note_hits) = crate::notes::search_keyword(&conn, &query, 10) {
+                for n in note_hits {
+                    lines.push(format!("- [{}/{} · {}] {}", n.area, n.slug, n.status, n.text));
+                }
+            }
+        }
+        if let Ok((_llm, memory)) = crate::chat_engine::llm_and_memory(&settings) {
+            if let Ok(hits) = memory
+                .recall(&query, crate::memory::RecallOpts::search(8))
+                .await
+            {
+                for hit in hits {
+                    let line = format!("- [vector:{}] {}", hit.source, hit.text);
+                    if !lines.iter().any(|existing| existing.contains(&hit.text)) {
+                        lines.push(line);
+                    }
+                }
+            }
+        }
+        if lines.is_empty() {
             return Ok(format!("Nothing saved in memory about \"{query}\"."));
         }
-        let mut lines = vec![format!("Memory results for \"{query}\":")];
-        for (i, hit) in hits.iter().enumerate() {
-            lines.push(format!("{}. [{}] {}", i + 1, hit.source, hit.text));
-        }
-        Ok(lines.join("\n"))
+        let mut out = vec![format!("Memory results for \"{query}\":")];
+        out.extend(lines);
+        Ok(out.join("\n"))
     })
 }
 

@@ -112,6 +112,12 @@ enum Commands {
     },
     /// Move legacy data (JSON chats, LanceDB memory) into piya.db and report counts
     Migrate,
+    /// Run repair + daily reflection over recent user conversations
+    Reflect {
+        /// Run even if reflection already ran today
+        #[arg(long)]
+        force: bool,
+    },
     /// Run basic-errand evals against the real model (throwaway data dir; asserts on state)
     Eval {
         /// Only run cases whose name contains this text
@@ -459,6 +465,22 @@ async fn run_async(cli: Cli, settings: Settings) -> Result<()> {
                 count("SELECT count(*) FROM memories"),
                 count("SELECT count(*) FROM memories WHERE embedding IS NOT NULL"));
             println!("  tasks:        {}", count("SELECT count(*) FROM tasks"));
+            println!("  notes:        {}", count("SELECT count(*) FROM notes WHERE status != 'archived'"));
+            println!("  skills:       {}", count("SELECT count(*) FROM learned_skills"));
+            Ok(())
+        }
+        Some(Commands::Reflect { force }) => {
+            let r = piya::reflect::reflect_if_due(&settings, force).await?;
+            println!(
+                "Reflection {} — scanned {} msg(s), saved {} note(s), promoted {}, replaced {}, expired {}, merged {} duplicate(s).",
+                if r.ran_reflection { "ran" } else { "up to date" },
+                r.messages_scanned,
+                r.notes_saved,
+                r.notes_promoted,
+                r.notes_replaced,
+                r.expired_archived,
+                r.duplicates_merged
+            );
             Ok(())
         }
         Some(Commands::Optimize) => {

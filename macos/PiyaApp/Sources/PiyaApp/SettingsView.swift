@@ -122,20 +122,6 @@ private func looksSecret(_ key: String) -> Bool {
         .contains { k.contains($0) }
 }
 
-private struct MemoryRow: Identifiable {
-    let id: String
-    let text: String
-    let kind: String
-    let createdAt: String
-
-    init(_ e: FfiMemoryEntry) {
-        id = e.id
-        text = e.text
-        kind = e.kind
-        createdAt = e.createdAt
-    }
-}
-
 // MARK: - Root
 
 struct SettingsView: View {
@@ -209,7 +195,11 @@ private struct GeneralSettingsTab: View {
                     Text("⌃⌘Space")
                         .foregroundStyle(.secondary)
                 }
-                Text("Works when Piya is focused. Global hotkey needs Accessibility permission (System Settings → Privacy & Security → Accessibility).")
+                LabeledContent("Voice dictation") {
+                    Text("⌃⇧Space")
+                        .foregroundStyle(.secondary)
+                }
+                Text("Works when Piya is focused (⌃⇧Space toggles on-device speech dictation). Global hotkey needs Accessibility permission (System Settings → Privacy & Security → Accessibility).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Button("Open Accessibility Settings…") {
@@ -357,6 +347,8 @@ private struct GeneralSettingsTab: View {
 private struct YouSettingsTab: View {
     @State private var profile = ""
     @State private var autoCapture = false
+    @State private var learnFromConversations = true
+    @State private var rememberSensitive = true
     @State private var digestEnabled = false
     @State private var digestHour: Double = 8
     @State private var status = ""
@@ -364,7 +356,7 @@ private struct YouSettingsTab: View {
     var body: some View {
         Form {
             Section("About you") {
-                Text("Pinned profile — injected into every chat turn so Piya remembers who you are.")
+                Text("Pinned profile — injected into every chat turn alongside your structured Memory notes.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 TextEditor(text: $profile)
@@ -373,8 +365,10 @@ private struct YouSettingsTab: View {
             }
 
             Section("Learning") {
-                Toggle("Auto-capture preferences from chat", isOn: $autoCapture)
-                Text("When on, clear statements like “I prefer markdown” may be saved to memory automatically (opt-in).")
+                Toggle("Learn from conversations daily", isOn: $learnFromConversations)
+                Toggle("Allow sensitive topics & reasoned opinions", isOn: $rememberSensitive)
+                Toggle("Instant preference capture in chat", isOn: $autoCapture)
+                Text("Manage everything Piya knows about you in the Memory tab.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -414,6 +408,8 @@ private struct YouSettingsTab: View {
             let prefs = try PiyaBackend.userPrefs()
             profile = prefs.profile
             autoCapture = prefs.autoCapturePrefs
+            learnFromConversations = prefs.learnFromConversations
+            rememberSensitive = prefs.rememberSensitive
             digestEnabled = prefs.digestEnabled
             digestHour = Double(prefs.digestHour)
             status = ""
@@ -427,100 +423,12 @@ private struct YouSettingsTab: View {
             try PiyaBackend.saveUserPrefs(
                 profile: profile,
                 autoCapture: autoCapture,
+                learnFromConversations: learnFromConversations,
+                rememberSensitive: rememberSensitive,
                 digestEnabled: digestEnabled,
                 digestHour: UInt32(digestHour)
             )
             status = "Saved — profile applies on the next message."
-        } catch {
-            status = error.localizedDescription
-        }
-    }
-}
-
-// MARK: - Memory
-
-private struct MemorySettingsTab: View {
-    @State private var memories: [MemoryRow] = []
-    @State private var status = ""
-    @State private var filter = ""
-
-    var filtered: [MemoryRow] {
-        let q = filter.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard !q.isEmpty else { return memories }
-        return memories.filter {
-            $0.text.lowercased().contains(q) || $0.kind.lowercased().contains(q)
-        }
-    }
-
-    var body: some View {
-        Form {
-            Section {
-                TextField("Search memories", text: $filter)
-                if filtered.isEmpty {
-                    Text(memories.isEmpty ? "No memories yet." : "No matches.")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(filtered) { item in
-                        VStack(alignment: .leading, spacing: 4) {
-                            HStack {
-                                Text(item.kind)
-                                    .font(.caption2)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(.quaternary, in: Capsule())
-                                Spacer()
-                                Button("Forget", role: .destructive) {
-                                    forget(item.id)
-                                }
-                                .font(.caption)
-                            }
-                            Text(item.text)
-                                .font(.callout)
-                                .textSelection(.enabled)
-                            if !item.createdAt.isEmpty {
-                                Text(item.createdAt)
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
-                            }
-                        }
-                        .padding(.vertical, 4)
-                    }
-                }
-            } header: {
-                Text("Long-term memory")
-            } footer: {
-                Text("List and forget only — inline edit comes later.")
-                    .font(.caption)
-            }
-
-            if !status.isEmpty {
-                Section {
-                    Text(status).font(.caption).foregroundStyle(.secondary)
-                }
-            }
-
-            Button("Reload") { load() }
-        }
-        .formStyle(.grouped)
-        .padding()
-        .onAppear(perform: load)
-    }
-
-    private func load() {
-        do {
-            memories = try PiyaBackend.listMemories(limit: 200).map(MemoryRow.init)
-            status = memories.isEmpty ? "" : "\(memories.count) memories"
-        } catch {
-            status = error.localizedDescription
-            memories = []
-        }
-    }
-
-    private func forget(_ id: String) {
-        do {
-            try PiyaBackend.deleteMemory(id: id)
-            memories.removeAll { $0.id == id }
-            status = "Forgot memory."
         } catch {
             status = error.localizedDescription
         }

@@ -198,7 +198,10 @@ pub fn format_for_prompt(att: &ChatAttachment, workspace: &Path) -> String {
                 att.kind, att.name
             ),
         },
-        "image" => format!("[Attached image `{}` ({ws_hint})]", att.name),
+        "image" => format!(
+            "[Attached image `{}` — included directly as a visual image in this message; inspect it visually without shell commands unless editing ({ws_hint})]",
+            att.name
+        ),
         _ => format!(
             "[Attached file `{}` ({}, {ws_hint})]",
             att.name,

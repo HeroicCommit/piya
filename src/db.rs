@@ -112,19 +112,67 @@ const MIGRATIONS: &[&str] = &[
         INSERT INTO attachments_fts(rowid, name, text) VALUES (new.rowid, new.name, COALESCE(new.text, ''));
     END;
     "#,
+    // 3: structured profile notes (always in context) and learned procedural skills
+    r#"
+    CREATE TABLE IF NOT EXISTS notes (
+        id             TEXT PRIMARY KEY,
+        area           TEXT NOT NULL,
+        slug           TEXT NOT NULL,
+        text           TEXT NOT NULL,
+        status         TEXT NOT NULL DEFAULT 'confirmed',
+        origin         TEXT NOT NULL DEFAULT 'stated',
+        evidence_count INTEGER NOT NULL DEFAULT 1,
+        quote          TEXT NOT NULL DEFAULT '',
+        source_msg_id  TEXT NOT NULL DEFAULT '',
+        expires_at     TEXT,
+        replaced_by    TEXT,
+        created_at     TEXT NOT NULL,
+        updated_at     TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_notes_status_area ON notes(status, area);
+
+    CREATE TABLE IF NOT EXISTS learned_skills (
+        name         TEXT PRIMARY KEY,
+        description  TEXT NOT NULL,
+        body         TEXT NOT NULL,
+        user_edited  INTEGER NOT NULL DEFAULT 0,
+        use_count    INTEGER NOT NULL DEFAULT 0,
+        created_at   TEXT NOT NULL,
+        updated_at   TEXT NOT NULL
+    );
+    "#,
 ];
 
 fn migrate(conn: &Connection) -> Result<()> {
-    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
-    for (i, sql) in MIGRATIONS.iter().enumerate() {
-        let target = i as i64 + 1;
-        if version >= target {
-            continue;
-        }
-        conn.execute_batch(&format!("BEGIN; {sql} PRAGMA user_version = {target}; COMMIT;"))
-            .with_context(|| format!("apply database migration {target}"))?;
+    let latest = MIGRATIONS.len() as i64;
+    let fast_ver: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if fast_ver >= latest {
+        return Ok(());
     }
-    Ok(())
+    conn.execute_batch("BEGIN IMMEDIATE;")
+        .context("acquire migration lock on piya.db")?;
+    let result = (|| -> Result<()> {
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        for (i, sql) in MIGRATIONS.iter().enumerate() {
+            let target = i as i64 + 1;
+            if version >= target {
+                continue;
+            }
+            conn.execute_batch(&format!("{sql}\nPRAGMA user_version = {target};"))
+                .with_context(|| format!("apply database migration {target}"))?;
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => {
+            conn.execute_batch("COMMIT;")?;
+            Ok(())
+        }
+        Err(err) => {
+            let _ = conn.execute_batch("ROLLBACK;");
+            Err(err)
+        }
+    }
 }
 
 pub fn get_state(conn: &Connection, key: &str) -> Result<Option<String>> {

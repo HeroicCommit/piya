@@ -49,6 +49,27 @@ automatically; a `memory-backup-*.jsonl` is written to the data folder first.
 CLI / `.env` equivalents: `PIYA_PROVIDER`, `PIYA_MODEL`, `PIYA_KEY_<PROVIDER>`, `PIYA_BASE_URL_<PROVIDER>`,
 `PIYA_EMBED_PROVIDER`, `PIYA_EMBEDDING_MODEL`. Existing installs with only `OPENAI_API_KEY` keep working as OpenAI.
 
+### Voice & Media Input
+
+In the Hummingbird chat composer:
+
+- **Voice dictation (`⌃⇧Space` or mic button):** Uses Apple's on-device `SFSpeechRecognizer` (private and free) to stream live speech directly into the composer.
+- **Attachments (paperclip, drag & drop, or `⌘V`):**
+  - **Images (`png`, `jpg`, `webp`, `gif`, screenshots pasted with `⌘V`):** Sent natively as vision blocks to OpenAI-compatible and Anthropic models.
+  - **PDFs & text documents:** Extracted locally via `PDFKit` / UTF-8 and indexed for full-text search across sessions.
+  - **Audio files (`m4a`, `mp3`, `wav`, …):** Transcribed on-device via `SFSpeechURLRecognitionRequest` and attached with their transcript.
+
+### Long-Term Memory, Daily Reflection & Learned Skills
+
+Everything lives in **one SQLite database (`data/piya.db`, WAL mode)** so Piya remembers what you discuss and improves day by day without LanceDB overhead:
+
+1. **Structured Notes (always in context):** Active notes across `about`, `preferences`, `people`, `routines`, `lessons`, and `opinions` are injected as a compact index into every chat and task turn.
+   - **Quote-verified anti-injection:** Model-proposed notes (`piya_memory_learn` and daily reflection) must include a verbatim quote from **your own words** (typed or voice-transcribed). Tool outputs, files, and web pages cannot plant false memories. Secrets and payment card numbers are blocked automatically.
+   - **Corrections replace, never duplicate:** Updating a fact ("Anna handles invoices now, not Bob") archives the older note with a `replaced_by` link.
+2. **Searchable Conversation & Attachment History:** Every chat message, PDF extract, and audio transcript is indexed in SQLite FTS5 (`piya_history_search`, plus automatic top matches when your message references earlier work).
+3. **Daily Reflection & Reasoned Opinions:** Once per day (`piya reflect` or **Settings → Memory → Reflect Now**), Piya repairs expired/duplicate notes, extracts tentative learnings from recent chats (`tentative` → promoted to `learned` when repeated), and can form revisable technical/workflow `opinions`.
+4. **Learned Procedural Skills:** Reusable multi-step procedures (`piya_skill_save` / `piya_skill_read` / `piya_skill_patch`) are indexed on every turn. Editing a skill in **Settings → Memory → Skills** locks it so Piya asks before overwriting it.
+
 ### Notifications
 
 Normal notifications are Notification Center banners. **Major alerts** open a panel in the middle of the screen that
@@ -195,7 +216,7 @@ cargo run -- recall "live chat pricing research"
 | `PIYA_MODEL` | `gpt-4o-mini` | Chat model |
 | `PIYA_EMBEDDING_MODEL` | `text-embedding-3-small` | Embedding model for vector memory |
 | `PIYA_WORKSPACE` | `./workspace` | Where artifacts are written |
-| `PIYA_DATA_DIR` | `./data` | Task SQLite + LanceDB vector memory |
+| `PIYA_DATA_DIR` | `./data` | Single `piya.db` SQLite store (tasks, chats, FTS5 history, notes, skills, vector memories) + `attachments/` |
 | `PIYA_POLL_INTERVAL_SEC` | `30` | Continuous mode poll interval |
 | `PIYA_MIN_ACCURACY` | `0.7` | Pass threshold for review |
 | `PIYA_MAX_RETRIES` | `3` | Re-plan attempts per task |
@@ -224,10 +245,11 @@ src/
 
 ```
 data/
-  piya.db           # tasks + cycle logs
-  memory.lance/     # LanceDB vector store (auto-migrates from legacy memory.db)
+  piya.db           # single SQLite DB (WAL): tasks, chats, FTS5 history, notes, learned skills, vector memories
+  attachments/      # staged images, PDFs, audio, and documents per session
 workspace/          # agent output files
 ```
+Legacy `chat-sessions/` and `memory.lance/` directories are migrated automatically (`piya migrate`) with `.migrated` backups preserved.
 
 ## Expertise domains
 

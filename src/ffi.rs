@@ -663,6 +663,8 @@ pub fn piya_cancel_chat() {
 pub struct FfiUserPrefs {
     pub profile: String,
     pub auto_capture_prefs: bool,
+    pub learn_from_conversations: bool,
+    pub remember_sensitive: bool,
     pub digest_enabled: bool,
     pub digest_hour: u32,
 }
@@ -674,6 +676,8 @@ pub fn piya_get_user_prefs() -> Result<FfiUserPrefs, PiyaError> {
     Ok(FfiUserPrefs {
         profile: prefs.profile,
         auto_capture_prefs: prefs.auto_capture_prefs,
+        learn_from_conversations: prefs.learn_from_conversations,
+        remember_sensitive: prefs.remember_sensitive,
         digest_enabled: prefs.digest_enabled,
         digest_hour: prefs.digest_hour,
     })
@@ -685,6 +689,8 @@ pub fn piya_save_user_prefs(prefs: FfiUserPrefs) -> Result<(), PiyaError> {
     let mut stored = crate::prefs::UserPrefs::load(&settings.data_dir).unwrap_or_default();
     stored.profile = prefs.profile;
     stored.auto_capture_prefs = prefs.auto_capture_prefs;
+    stored.learn_from_conversations = prefs.learn_from_conversations;
+    stored.remember_sensitive = prefs.remember_sensitive;
     stored.digest_enabled = prefs.digest_enabled;
     stored.digest_hour = prefs.digest_hour.min(23);
     stored.save(&settings.data_dir).map_err(map_err)
@@ -986,4 +992,153 @@ pub fn piya_snooze_alert(title: String, body: String, minutes: u32) -> Result<St
 pub fn piya_test_major_alert() {
     let _ = load_settings();
     crate::notify::major_alert("Test major alert", "This stays on screen until you dismiss it.");
+}
+
+// ----- Structured Notes & Learned Skills --------------------------------------
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiNote {
+    pub id: String,
+    pub area: String,
+    pub slug: String,
+    pub text: String,
+    pub status: String,
+    pub origin: String,
+    pub evidence_count: i64,
+    pub quote: String,
+    pub expires_at: String,
+    pub updated_at: String,
+}
+
+fn note_to_ffi(n: crate::notes::Note) -> FfiNote {
+    FfiNote {
+        id: n.id,
+        area: n.area,
+        slug: n.slug,
+        text: n.text,
+        status: n.status,
+        origin: n.origin,
+        evidence_count: n.evidence_count,
+        quote: n.quote,
+        expires_at: n.expires_at.unwrap_or_default(),
+        updated_at: n.updated_at,
+    }
+}
+
+#[uniffi::export]
+pub fn piya_list_notes(include_archived: bool) -> Result<Vec<FfiNote>, PiyaError> {
+    let settings = load_settings()?;
+    let conn = crate::db::open(&settings.data_dir).map_err(map_err)?;
+    let notes = crate::notes::list_all(&conn, include_archived).map_err(map_err)?;
+    Ok(notes.into_iter().map(note_to_ffi).collect())
+}
+
+#[uniffi::export]
+pub fn piya_save_note(
+    id: String,
+    area: String,
+    slug: String,
+    text: String,
+) -> Result<FfiNote, PiyaError> {
+    let settings = load_settings()?;
+    let conn = crate::db::open(&settings.data_dir).map_err(map_err)?;
+    let id_opt = (!id.trim().is_empty()).then_some(id.as_str());
+    let slug_opt = (!slug.trim().is_empty()).then_some(slug.as_str());
+    let saved = crate::notes::save_manual_note(&conn, id_opt, &area, slug_opt, &text)
+        .map_err(map_err)?;
+    Ok(note_to_ffi(saved))
+}
+
+#[uniffi::export]
+pub fn piya_confirm_note(id: String) -> Result<FfiNote, PiyaError> {
+    let settings = load_settings()?;
+    let conn = crate::db::open(&settings.data_dir).map_err(map_err)?;
+    let saved = crate::notes::confirm_note(&conn, &id).map_err(map_err)?;
+    Ok(note_to_ffi(saved))
+}
+
+#[uniffi::export]
+pub fn piya_forget_note(id: String) -> Result<(), PiyaError> {
+    let settings = load_settings()?;
+    let conn = crate::db::open(&settings.data_dir).map_err(map_err)?;
+    let _ = crate::notes::forget_note(&conn, &id).map_err(map_err)?;
+    Ok(())
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiLearnedSkill {
+    pub name: String,
+    pub description: String,
+    pub body: String,
+    pub user_edited: bool,
+    pub use_count: i64,
+    pub updated_at: String,
+}
+
+fn skill_to_ffi(s: crate::skills::LearnedSkill) -> FfiLearnedSkill {
+    FfiLearnedSkill {
+        name: s.name,
+        description: s.description,
+        body: s.body,
+        user_edited: s.user_edited,
+        use_count: s.use_count,
+        updated_at: s.updated_at,
+    }
+}
+
+#[uniffi::export]
+pub fn piya_list_skills() -> Result<Vec<FfiLearnedSkill>, PiyaError> {
+    let settings = load_settings()?;
+    let conn = crate::db::open(&settings.data_dir).map_err(map_err)?;
+    let skills = crate::skills::list_skills(&conn).map_err(map_err)?;
+    Ok(skills.into_iter().map(skill_to_ffi).collect())
+}
+
+#[uniffi::export]
+pub fn piya_save_skill(
+    name: String,
+    description: String,
+    body: String,
+) -> Result<FfiLearnedSkill, PiyaError> {
+    let settings = load_settings()?;
+    let conn = crate::db::open(&settings.data_dir).map_err(map_err)?;
+    let saved = crate::skills::save_skill(&conn, &name, &description, &body, true)
+        .map_err(map_err)?;
+    Ok(skill_to_ffi(saved))
+}
+
+#[uniffi::export]
+pub fn piya_delete_skill(name: String) -> Result<(), PiyaError> {
+    let settings = load_settings()?;
+    let conn = crate::db::open(&settings.data_dir).map_err(map_err)?;
+    crate::skills::delete_skill(&conn, &name).map_err(map_err)
+}
+
+#[uniffi::export]
+pub fn piya_run_reflection(force: bool) -> Result<String, PiyaError> {
+    let settings = load_settings()?;
+    let report = crate::runtime::block_on(async move {
+        crate::reflect::reflect_if_due(&settings, force).await
+    })
+    .map_err(map_err)?;
+    if !report.ran_reflection {
+        return Ok(format!(
+            "Nothing new to reflect on (repaired: {} expired, {} duplicates merged).",
+            report.expired_archived, report.duplicates_merged
+        ));
+    }
+    Ok(format!(
+        "Reviewed {} messages — {} saved, {} confirmed, {} updated.",
+        report.messages_scanned,
+        report.notes_saved,
+        report.notes_promoted,
+        report.notes_replaced
+    ))
+}
+
+#[uniffi::export]
+pub fn piya_export_memory_markdown() -> Result<String, PiyaError> {
+    let settings = load_settings()?;
+    let conn = crate::db::open(&settings.data_dir).map_err(map_err)?;
+    crate::notes::export_markdown(&conn).map_err(map_err)
 }

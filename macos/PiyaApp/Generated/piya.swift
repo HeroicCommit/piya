@@ -909,6 +909,108 @@ public func FfiConverterTypeFfiChatTurn_lower(_ value: FfiChatTurn) -> RustBuffe
 }
 
 
+public struct FfiLearnedSkill {
+    public var name: String
+    public var description: String
+    public var body: String
+    public var userEdited: Bool
+    public var useCount: Int64
+    public var updatedAt: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(name: String, description: String, body: String, userEdited: Bool, useCount: Int64, updatedAt: String) {
+        self.name = name
+        self.description = description
+        self.body = body
+        self.userEdited = userEdited
+        self.useCount = useCount
+        self.updatedAt = updatedAt
+    }
+}
+
+#if compiler(>=6)
+extension FfiLearnedSkill: Sendable {}
+#endif
+
+
+extension FfiLearnedSkill: Equatable, Hashable {
+    public static func ==(lhs: FfiLearnedSkill, rhs: FfiLearnedSkill) -> Bool {
+        if lhs.name != rhs.name {
+            return false
+        }
+        if lhs.description != rhs.description {
+            return false
+        }
+        if lhs.body != rhs.body {
+            return false
+        }
+        if lhs.userEdited != rhs.userEdited {
+            return false
+        }
+        if lhs.useCount != rhs.useCount {
+            return false
+        }
+        if lhs.updatedAt != rhs.updatedAt {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(name)
+        hasher.combine(description)
+        hasher.combine(body)
+        hasher.combine(userEdited)
+        hasher.combine(useCount)
+        hasher.combine(updatedAt)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiLearnedSkill: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiLearnedSkill {
+        return
+            try FfiLearnedSkill(
+                name: FfiConverterString.read(from: &buf), 
+                description: FfiConverterString.read(from: &buf), 
+                body: FfiConverterString.read(from: &buf), 
+                userEdited: FfiConverterBool.read(from: &buf), 
+                useCount: FfiConverterInt64.read(from: &buf), 
+                updatedAt: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiLearnedSkill, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterString.write(value.description, into: &buf)
+        FfiConverterString.write(value.body, into: &buf)
+        FfiConverterBool.write(value.userEdited, into: &buf)
+        FfiConverterInt64.write(value.useCount, into: &buf)
+        FfiConverterString.write(value.updatedAt, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiLearnedSkill_lift(_ buf: RustBuffer) throws -> FfiLearnedSkill {
+    return try FfiConverterTypeFfiLearnedSkill.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiLearnedSkill_lower(_ value: FfiLearnedSkill) -> RustBuffer {
+    return FfiConverterTypeFfiLearnedSkill.lower(value)
+}
+
+
 /**
  * Result of Settings → "Test connection" (never throws; errors are in `error`).
  */
@@ -1480,6 +1582,140 @@ public func FfiConverterTypeFfiModelSettings_lower(_ value: FfiModelSettings) ->
 }
 
 
+public struct FfiNote {
+    public var id: String
+    public var area: String
+    public var slug: String
+    public var text: String
+    public var status: String
+    public var origin: String
+    public var evidenceCount: Int64
+    public var quote: String
+    public var expiresAt: String
+    public var updatedAt: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, area: String, slug: String, text: String, status: String, origin: String, evidenceCount: Int64, quote: String, expiresAt: String, updatedAt: String) {
+        self.id = id
+        self.area = area
+        self.slug = slug
+        self.text = text
+        self.status = status
+        self.origin = origin
+        self.evidenceCount = evidenceCount
+        self.quote = quote
+        self.expiresAt = expiresAt
+        self.updatedAt = updatedAt
+    }
+}
+
+#if compiler(>=6)
+extension FfiNote: Sendable {}
+#endif
+
+
+extension FfiNote: Equatable, Hashable {
+    public static func ==(lhs: FfiNote, rhs: FfiNote) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.area != rhs.area {
+            return false
+        }
+        if lhs.slug != rhs.slug {
+            return false
+        }
+        if lhs.text != rhs.text {
+            return false
+        }
+        if lhs.status != rhs.status {
+            return false
+        }
+        if lhs.origin != rhs.origin {
+            return false
+        }
+        if lhs.evidenceCount != rhs.evidenceCount {
+            return false
+        }
+        if lhs.quote != rhs.quote {
+            return false
+        }
+        if lhs.expiresAt != rhs.expiresAt {
+            return false
+        }
+        if lhs.updatedAt != rhs.updatedAt {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(area)
+        hasher.combine(slug)
+        hasher.combine(text)
+        hasher.combine(status)
+        hasher.combine(origin)
+        hasher.combine(evidenceCount)
+        hasher.combine(quote)
+        hasher.combine(expiresAt)
+        hasher.combine(updatedAt)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiNote: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiNote {
+        return
+            try FfiNote(
+                id: FfiConverterString.read(from: &buf), 
+                area: FfiConverterString.read(from: &buf), 
+                slug: FfiConverterString.read(from: &buf), 
+                text: FfiConverterString.read(from: &buf), 
+                status: FfiConverterString.read(from: &buf), 
+                origin: FfiConverterString.read(from: &buf), 
+                evidenceCount: FfiConverterInt64.read(from: &buf), 
+                quote: FfiConverterString.read(from: &buf), 
+                expiresAt: FfiConverterString.read(from: &buf), 
+                updatedAt: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiNote, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.area, into: &buf)
+        FfiConverterString.write(value.slug, into: &buf)
+        FfiConverterString.write(value.text, into: &buf)
+        FfiConverterString.write(value.status, into: &buf)
+        FfiConverterString.write(value.origin, into: &buf)
+        FfiConverterInt64.write(value.evidenceCount, into: &buf)
+        FfiConverterString.write(value.quote, into: &buf)
+        FfiConverterString.write(value.expiresAt, into: &buf)
+        FfiConverterString.write(value.updatedAt, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiNote_lift(_ buf: RustBuffer) throws -> FfiNote {
+    return try FfiConverterTypeFfiNote.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiNote_lower(_ value: FfiNote) -> RustBuffer {
+    return FfiConverterTypeFfiNote.lower(value)
+}
+
+
 public struct FfiProvider {
     public var id: String
     public var label: String
@@ -1945,14 +2181,18 @@ public func FfiConverterTypeFfiUpdateCheck_lower(_ value: FfiUpdateCheck) -> Rus
 public struct FfiUserPrefs {
     public var profile: String
     public var autoCapturePrefs: Bool
+    public var learnFromConversations: Bool
+    public var rememberSensitive: Bool
     public var digestEnabled: Bool
     public var digestHour: UInt32
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(profile: String, autoCapturePrefs: Bool, digestEnabled: Bool, digestHour: UInt32) {
+    public init(profile: String, autoCapturePrefs: Bool, learnFromConversations: Bool, rememberSensitive: Bool, digestEnabled: Bool, digestHour: UInt32) {
         self.profile = profile
         self.autoCapturePrefs = autoCapturePrefs
+        self.learnFromConversations = learnFromConversations
+        self.rememberSensitive = rememberSensitive
         self.digestEnabled = digestEnabled
         self.digestHour = digestHour
     }
@@ -1971,6 +2211,12 @@ extension FfiUserPrefs: Equatable, Hashable {
         if lhs.autoCapturePrefs != rhs.autoCapturePrefs {
             return false
         }
+        if lhs.learnFromConversations != rhs.learnFromConversations {
+            return false
+        }
+        if lhs.rememberSensitive != rhs.rememberSensitive {
+            return false
+        }
         if lhs.digestEnabled != rhs.digestEnabled {
             return false
         }
@@ -1983,6 +2229,8 @@ extension FfiUserPrefs: Equatable, Hashable {
     public func hash(into hasher: inout Hasher) {
         hasher.combine(profile)
         hasher.combine(autoCapturePrefs)
+        hasher.combine(learnFromConversations)
+        hasher.combine(rememberSensitive)
         hasher.combine(digestEnabled)
         hasher.combine(digestHour)
     }
@@ -1999,6 +2247,8 @@ public struct FfiConverterTypeFfiUserPrefs: FfiConverterRustBuffer {
             try FfiUserPrefs(
                 profile: FfiConverterString.read(from: &buf), 
                 autoCapturePrefs: FfiConverterBool.read(from: &buf), 
+                learnFromConversations: FfiConverterBool.read(from: &buf), 
+                rememberSensitive: FfiConverterBool.read(from: &buf), 
                 digestEnabled: FfiConverterBool.read(from: &buf), 
                 digestHour: FfiConverterUInt32.read(from: &buf)
         )
@@ -2007,6 +2257,8 @@ public struct FfiConverterTypeFfiUserPrefs: FfiConverterRustBuffer {
     public static func write(_ value: FfiUserPrefs, into buf: inout [UInt8]) {
         FfiConverterString.write(value.profile, into: &buf)
         FfiConverterBool.write(value.autoCapturePrefs, into: &buf)
+        FfiConverterBool.write(value.learnFromConversations, into: &buf)
+        FfiConverterBool.write(value.rememberSensitive, into: &buf)
         FfiConverterBool.write(value.digestEnabled, into: &buf)
         FfiConverterUInt32.write(value.digestHour, into: &buf)
     }
@@ -2330,6 +2582,31 @@ fileprivate struct FfiConverterSequenceTypeFfiChatTurn: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeFfiLearnedSkill: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiLearnedSkill]
+
+    public static func write(_ value: [FfiLearnedSkill], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiLearnedSkill.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiLearnedSkill] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiLearnedSkill]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiLearnedSkill.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeFfiMcpServer: FfiConverterRustBuffer {
     typealias SwiftType = [FfiMcpServer]
 
@@ -2397,6 +2674,31 @@ fileprivate struct FfiConverterSequenceTypeFfiMemoryEntry: FfiConverterRustBuffe
         seq.reserveCapacity(Int(len))
         for _ in 0 ..< len {
             seq.append(try FfiConverterTypeFfiMemoryEntry.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+fileprivate struct FfiConverterSequenceTypeFfiNote: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiNote]
+
+    public static func write(_ value: [FfiNote], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiNote.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiNote] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiNote]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiNote.read(from: &buf))
         }
         return seq
     }
@@ -2530,6 +2832,13 @@ public func piyaCheckForUpdate()throws  -> FfiUpdateCheck  {
     )
 })
 }
+public func piyaConfirmNote(id: String)throws  -> FfiNote  {
+    return try  FfiConverterTypeFfiNote_lift(try rustCallWithError(FfiConverterTypePiyaError_lift) {
+    uniffi_piya_fn_func_piya_confirm_note(
+        FfiConverterString.lower(id),$0
+    )
+})
+}
 public func piyaCreateChatSession(mode: String)throws  -> FfiChatSessionMeta  {
     return try  FfiConverterTypeFfiChatSessionMeta_lift(try rustCallWithError(FfiConverterTypePiyaError_lift) {
     uniffi_piya_fn_func_piya_create_chat_session(
@@ -2551,6 +2860,24 @@ public func piyaDeleteChatSession(id: String)throws   {try rustCallWithError(Ffi
 }
 public func piyaDeleteMemory(id: String)throws   {try rustCallWithError(FfiConverterTypePiyaError_lift) {
     uniffi_piya_fn_func_piya_delete_memory(
+        FfiConverterString.lower(id),$0
+    )
+}
+}
+public func piyaDeleteSkill(name: String)throws   {try rustCallWithError(FfiConverterTypePiyaError_lift) {
+    uniffi_piya_fn_func_piya_delete_skill(
+        FfiConverterString.lower(name),$0
+    )
+}
+}
+public func piyaExportMemoryMarkdown()throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypePiyaError_lift) {
+    uniffi_piya_fn_func_piya_export_memory_markdown($0
+    )
+})
+}
+public func piyaForgetNote(id: String)throws   {try rustCallWithError(FfiConverterTypePiyaError_lift) {
+    uniffi_piya_fn_func_piya_forget_note(
         FfiConverterString.lower(id),$0
     )
 }
@@ -2627,9 +2954,22 @@ public func piyaListModels(provider: String, apiKey: String, baseUrl: String, em
     )
 })
 }
+public func piyaListNotes(includeArchived: Bool)throws  -> [FfiNote]  {
+    return try  FfiConverterSequenceTypeFfiNote.lift(try rustCallWithError(FfiConverterTypePiyaError_lift) {
+    uniffi_piya_fn_func_piya_list_notes(
+        FfiConverterBool.lower(includeArchived),$0
+    )
+})
+}
 public func piyaListProviders() -> [FfiProvider]  {
     return try!  FfiConverterSequenceTypeFfiProvider.lift(try! rustCall() {
     uniffi_piya_fn_func_piya_list_providers($0
+    )
+})
+}
+public func piyaListSkills()throws  -> [FfiLearnedSkill]  {
+    return try  FfiConverterSequenceTypeFfiLearnedSkill.lift(try rustCallWithError(FfiConverterTypePiyaError_lift) {
+    uniffi_piya_fn_func_piya_list_skills($0
     )
 })
 }
@@ -2659,6 +2999,13 @@ public func piyaRunPendingTasks()throws   {try rustCallWithError(FfiConverterTyp
     )
 }
 }
+public func piyaRunReflection(force: Bool)throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypePiyaError_lift) {
+    uniffi_piya_fn_func_piya_run_reflection(
+        FfiConverterBool.lower(force),$0
+    )
+})
+}
 public func piyaSaveAppEnvSettings(env: FfiAppEnvSettings)throws   {try rustCallWithError(FfiConverterTypePiyaError_lift) {
     uniffi_piya_fn_func_piya_save_app_env_settings(
         FfiConverterTypeFfiAppEnvSettings_lower(env),$0
@@ -2683,6 +3030,25 @@ public func piyaSaveModelSettings(settings: FfiModelSettings)throws   {try rustC
         FfiConverterTypeFfiModelSettings_lower(settings),$0
     )
 }
+}
+public func piyaSaveNote(id: String, area: String, slug: String, text: String)throws  -> FfiNote  {
+    return try  FfiConverterTypeFfiNote_lift(try rustCallWithError(FfiConverterTypePiyaError_lift) {
+    uniffi_piya_fn_func_piya_save_note(
+        FfiConverterString.lower(id),
+        FfiConverterString.lower(area),
+        FfiConverterString.lower(slug),
+        FfiConverterString.lower(text),$0
+    )
+})
+}
+public func piyaSaveSkill(name: String, description: String, body: String)throws  -> FfiLearnedSkill  {
+    return try  FfiConverterTypeFfiLearnedSkill_lift(try rustCallWithError(FfiConverterTypePiyaError_lift) {
+    uniffi_piya_fn_func_piya_save_skill(
+        FfiConverterString.lower(name),
+        FfiConverterString.lower(description),
+        FfiConverterString.lower(body),$0
+    )
+})
 }
 public func piyaSaveUserPrefs(prefs: FfiUserPrefs)throws   {try rustCallWithError(FfiConverterTypePiyaError_lift) {
     uniffi_piya_fn_func_piya_save_user_prefs(
@@ -2836,6 +3202,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_piya_checksum_func_piya_check_for_update() != 56684) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_piya_checksum_func_piya_confirm_note() != 14863) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_piya_checksum_func_piya_create_chat_session() != 4161) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -2846,6 +3215,15 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_piya_checksum_func_piya_delete_memory() != 53477) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_piya_checksum_func_piya_delete_skill() != 46075) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_piya_checksum_func_piya_export_memory_markdown() != 20756) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_piya_checksum_func_piya_forget_note() != 15639) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_piya_checksum_func_piya_get_app_env_settings() != 10851) {
@@ -2875,7 +3253,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_piya_checksum_func_piya_list_models() != 15817) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_piya_checksum_func_piya_list_notes() != 23838) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_piya_checksum_func_piya_list_providers() != 29364) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_piya_checksum_func_piya_list_skills() != 46380) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_piya_checksum_func_piya_list_tasks() != 25783) {
@@ -2890,6 +3274,9 @@ private let initializationResult: InitializationResult = {
     if (uniffi_piya_checksum_func_piya_run_pending_tasks() != 20878) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_piya_checksum_func_piya_run_reflection() != 38526) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_piya_checksum_func_piya_save_app_env_settings() != 22037) {
         return InitializationResult.apiChecksumMismatch
     }
@@ -2900,6 +3287,12 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_piya_checksum_func_piya_save_model_settings() != 15786) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_piya_checksum_func_piya_save_note() != 40637) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_piya_checksum_func_piya_save_skill() != 15561) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_piya_checksum_func_piya_save_user_prefs() != 30124) {

@@ -200,6 +200,8 @@ enum PiyaBackend {
     static func saveUserPrefs(
         profile: String,
         autoCapture: Bool,
+        learnFromConversations: Bool = true,
+        rememberSensitive: Bool = true,
         digestEnabled: Bool,
         digestHour: UInt32
     ) throws {
@@ -208,10 +210,23 @@ enum PiyaBackend {
             prefs: FfiUserPrefs(
                 profile: profile,
                 autoCapturePrefs: autoCapture,
+                learnFromConversations: learnFromConversations,
+                rememberSensitive: rememberSensitive,
                 digestEnabled: digestEnabled,
                 digestHour: digestHour
             )
         )
+    }
+
+    static func saveLearningPrefs(
+        learnFromConversations: Bool,
+        rememberSensitive: Bool
+    ) throws {
+        bootstrap()
+        var current = try piyaGetUserPrefs()
+        current.learnFromConversations = learnFromConversations
+        current.rememberSensitive = rememberSensitive
+        try piyaSaveUserPrefs(prefs: current)
     }
 
     static func appEnvSettings() throws -> FfiAppEnvSettings {
@@ -276,6 +291,53 @@ enum PiyaBackend {
     static func deleteMemory(id: String) throws {
         bootstrap()
         try piyaDeleteMemory(id: id)
+    }
+
+    // MARK: Structured Notes & Learned Skills
+
+    static func listNotes(includeArchived: Bool = false) throws -> [FfiNote] {
+        bootstrap()
+        return try piyaListNotes(includeArchived: includeArchived)
+    }
+
+    static func saveNote(id: String = "", area: String, slug: String = "", text: String) throws -> FfiNote {
+        bootstrap()
+        return try piyaSaveNote(id: id, area: area, slug: slug, text: text)
+    }
+
+    static func confirmNote(id: String) throws -> FfiNote {
+        bootstrap()
+        return try piyaConfirmNote(id: id)
+    }
+
+    static func forgetNote(id: String) throws {
+        bootstrap()
+        try piyaForgetNote(id: id)
+    }
+
+    static func listSkills() throws -> [FfiLearnedSkill] {
+        bootstrap()
+        return try piyaListSkills()
+    }
+
+    static func saveSkill(name: String, description: String, body: String) throws -> FfiLearnedSkill {
+        bootstrap()
+        return try piyaSaveSkill(name: name, description: description, body: body)
+    }
+
+    static func deleteSkill(name: String) throws {
+        bootstrap()
+        try piyaDeleteSkill(name: name)
+    }
+
+    static func runReflection(force: Bool = true) throws -> String {
+        bootstrap()
+        return try piyaRunReflection(force: force)
+    }
+
+    static func exportMemoryMarkdown() throws -> String {
+        bootstrap()
+        return try piyaExportMemoryMarkdown()
     }
 
     static func checkForUpdate() throws -> FfiUpdateCheck {

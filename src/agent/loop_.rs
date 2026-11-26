@@ -98,7 +98,11 @@ impl AgentLoop {
         self.memory = Some(VectorMemory::new(&self.settings.data_dir, llm.clone())?);
         self.planner = Some(Planner::new(llm.clone()));
         self.researcher = Some(Researcher::new(llm.clone()));
-        self.executor = Some(Executor::new(llm.clone(), self.settings.workspace.clone())?);
+        self.executor = Some(Executor::new(
+            llm.clone(),
+            self.settings.workspace.clone(),
+            self.settings.data_dir.clone(),
+        )?);
         self.reviewer = Some(Reviewer::new(llm.clone()));
         self.llm = Some(llm);
         Ok(())
@@ -136,6 +140,9 @@ impl AgentLoop {
         let mut cycles = 0u64;
 
         loop {
+            if let Err(err) = crate::reflect::reflect_if_due(&self.settings, false).await {
+                warn!("daily reflection skipped: {err:#}");
+            }
             let outcome = match self.run_once().await {
                 Ok(outcome) => outcome,
                 Err(err) => {
@@ -202,8 +209,23 @@ impl AgentLoop {
 
             for attempt in 1..=self.settings.max_retries {
             let query = format!("{}\n{}", task.title, task.description);
-            let hits = memory.recall(&query, crate::memory::RecallOpts::observe(6)).await?;
-            let memory_context = VectorMemory::format_context(&hits);
+            let hits = memory
+                .recall(&query, crate::memory::RecallOpts::observe(6))
+                .await
+                .unwrap_or_default();
+            let mut ctx_parts = Vec::new();
+            if let Ok(conn) = crate::db::open(&self.settings.data_dir) {
+                let notes_idx = crate::notes::format_index(&conn);
+                if !notes_idx.is_empty() {
+                    ctx_parts.push(notes_idx);
+                }
+                let skills_idx = crate::skills::format_index(&conn);
+                if !skills_idx.is_empty() {
+                    ctx_parts.push(skills_idx);
+                }
+            }
+            ctx_parts.push(VectorMemory::format_context(&hits));
+            let memory_context = ctx_parts.join("\n\n");
             self.tasks.log_cycle(&task.id, "observe", None, Some(&memory_context), None)?;
             self.phase("👁", "OBSERVE", &format!("recalled {} memories", hits.len()));
 
@@ -523,9 +545,9 @@ impl AgentLoop {
                 let kind = MemoryKind::parse(
                     item.get("kind").and_then(|v| v.as_str()).unwrap_or("learning"),
                 );
-                memory
+                let _ = memory
                     .remember(text, kind, Some(&task.id), &tags, accuracy)
-                    .await?;
+                    .await;
             }
         }
 
@@ -536,7 +558,7 @@ impl AgentLoop {
             execution.get("summary").and_then(|v| v.as_str()).unwrap_or(""),
             review.get("gaps")
         );
-        memory
+        let _ = memory
             .remember(
                 &outcome,
                 MemoryKind::Outcome,
@@ -544,7 +566,7 @@ impl AgentLoop {
                 &[],
                 accuracy,
             )
-            .await?;
+            .await;
 
         if let Some(facts) = research.get("key_facts").and_then(|v| v.as_array()) {
             let joined: Vec<&str> = facts
@@ -558,16 +580,16 @@ impl AgentLoop {
                     .get("confidence")
                     .and_then(|v| v.as_f64())
                     .unwrap_or(0.5);
-                memory
+                let _ = memory
                     .remember(&text, MemoryKind::Research, Some(&task.id), &[], conf)
-                    .await?;
+                    .await;
             }
         }
 
         if let Some(corrections) = review.get("corrections").and_then(|v| v.as_array()) {
             for correction in corrections {
                 if let Some(text) = correction.as_str() {
-                    memory
+                    let _ = memory
                         .remember(
                             text,
                             MemoryKind::Correction,
@@ -575,7 +597,7 @@ impl AgentLoop {
                             &[],
                             (accuracy - 0.1).max(0.3),
                         )
-                        .await?;
+                        .await;
                 }
             }
         }
