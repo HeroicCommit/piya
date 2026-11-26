@@ -157,6 +157,8 @@ cat > "$APP/Contents/Info.plist" <<EOF
   <key>NSHighResolutionCapable</key><true/>
   <key>CFBundleIconName</key><string>AppIcon</string>
   <key>NSUserNotificationAlertStyle</key><string>alert</string>
+  <key>NSMicrophoneUsageDescription</key><string>Piya uses your microphone for on-device voice dictation when you use the mic button or push-to-talk.</string>
+  <key>NSSpeechRecognitionUsageDescription</key><string>Piya transcribes your voice and audio files privately on your Mac using Apple Speech.</string>
 </dict>
 </plist>
 EOF

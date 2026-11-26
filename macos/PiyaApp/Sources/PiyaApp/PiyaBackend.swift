@@ -31,12 +31,41 @@ enum PiyaBackend {
         ready = true
     }
 
-    static func send(message: String, history: [ChatMessage]) throws -> String {
+    static func send(
+        message: String,
+        attachments: [AttachmentItem] = [],
+        history: [ChatMessage]
+    ) throws -> String {
         bootstrap()
         let turns = history.map {
-            FfiChatTurn(role: $0.role, text: $0.text)
+            FfiChatTurn(
+                role: $0.role,
+                text: $0.text,
+                attachments: $0.attachments.map(\.ffi)
+            )
         }
-        return try piyaSend(message: message, mode: .chat, history: turns)
+        return try piyaSendWithAttachments(
+            message: message,
+            attachments: attachments.map(\.ffi),
+            mode: .chat,
+            history: turns
+        )
+    }
+
+    static func stageAttachment(
+        sessionId: String,
+        sourcePath: String,
+        displayName: String = "",
+        extractedText: String = ""
+    ) throws -> AttachmentItem {
+        bootstrap()
+        let ffi = try piyaStageAttachment(
+            sessionId: sessionId,
+            sourcePath: sourcePath,
+            displayName: displayName,
+            extractedText: extractedText
+        )
+        return AttachmentItem(ffi)
     }
 
     /// Live status while a chat turn runs (e.g. `$ ls ~/Documents`). Empty when idle.
@@ -55,14 +84,17 @@ enum PiyaBackend {
         let session = try piyaLoadChatSession()
         let sessionId = (try? piyaActiveChatSessionId()) ?? "active"
         return session.messages.enumerated().map { index, turn in
-            ChatMessage(
+            let atts = turn.attachments.map(AttachmentItem.init)
+            return ChatMessage(
                 role: turn.role,
                 text: turn.text,
+                attachments: atts,
                 id: ChatMessage.stableID(
                     sessionId: sessionId,
                     index: index,
                     role: turn.role,
-                    text: turn.text
+                    text: turn.text,
+                    attachmentIds: atts.map(\.id)
                 )
             )
         }
@@ -71,7 +103,11 @@ enum PiyaBackend {
     static func saveSession(messages: [ChatMessage]) {
         bootstrap()
         let turns = messages.map {
-            FfiChatTurn(role: $0.role, text: $0.text)
+            FfiChatTurn(
+                role: $0.role,
+                text: $0.text,
+                attachments: $0.attachments.map(\.ffi)
+            )
         }
         try? piyaSaveChatSession(mode: "chat", messages: turns)
     }
@@ -253,19 +289,86 @@ enum PiyaBackend {
     }
 }
 
+struct AttachmentItem: Identifiable, Equatable {
+    let id: String
+    let name: String
+    let path: String
+    let resolvedPath: String
+    let mime: String
+    let kind: String
+    let text: String
+
+    init(_ ffi: FfiAttachment) {
+        id = ffi.id
+        name = ffi.name
+        path = ffi.path
+        resolvedPath = ffi.resolvedPath
+        mime = ffi.mime
+        kind = ffi.kind
+        text = ffi.text
+    }
+
+    var ffi: FfiAttachment {
+        FfiAttachment(
+            id: id,
+            name: name,
+            path: path,
+            resolvedPath: resolvedPath,
+            mime: mime,
+            kind: kind,
+            text: text
+        )
+    }
+
+    var isImage: Bool { kind == "image" }
+
+    var badgeLabel: String {
+        switch kind {
+        case "image": return "Image"
+        case "pdf": return text.isEmpty ? "PDF" : "PDF · text ready"
+        case "audio": return text.isEmpty ? "Audio" : "Voice · transcribed"
+        case "document": return "Document"
+        default: return "File"
+        }
+    }
+
+    var symbolName: String {
+        switch kind {
+        case "image": return "photo"
+        case "pdf": return "doc.richtext"
+        case "audio": return "waveform"
+        case "document": return "doc.text"
+        default: return "paperclip"
+        }
+    }
+}
+
 struct ChatMessage: Identifiable, Equatable {
     let id: UUID
     let role: String
     let text: String
+    let attachments: [AttachmentItem]
 
-    init(role: String, text: String, id: UUID = UUID()) {
+    init(
+        role: String,
+        text: String,
+        attachments: [AttachmentItem] = [],
+        id: UUID = UUID()
+    ) {
         self.id = id
         self.role = role
         self.text = text
+        self.attachments = attachments
     }
 
     /// Stable id so scroll position survives reload of the same turn.
-    static func stableID(sessionId: String, index: Int, role: String, text: String) -> UUID {
+    static func stableID(
+        sessionId: String,
+        index: Int,
+        role: String,
+        text: String,
+        attachmentIds: [String] = []
+    ) -> UUID {
         var hasher = Hasher()
         hasher.combine(sessionId)
         hasher.combine(index)
@@ -273,6 +376,9 @@ struct ChatMessage: Identifiable, Equatable {
         hasher.combine(text.utf16.count)
         hasher.combine(text.prefix(64))
         hasher.combine(text.suffix(64))
+        for aid in attachmentIds {
+            hasher.combine(aid)
+        }
         let bits = UInt64(bitPattern: Int64(hasher.finalize()))
         return UUID(uuid: (
             UInt8(truncatingIfNeeded: bits >> 56),

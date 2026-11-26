@@ -188,25 +188,81 @@ enum MessageMarkdown {
 
 struct MessageBubbleContent: View {
     let text: String
+    var attachments: [AttachmentItem] = []
     let isUser: Bool
     @State private var expanded = false
 
     private var large: Bool { MessageMarkdown.isLarge(text) }
+    private var hasText: Bool { !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            if large && !expanded {
-                largeCollapsedBody
-            } else if large && expanded {
-                largeExpandedBody
-            } else {
-                smallRichBody
+            if !attachments.isEmpty {
+                attachmentsView
+            }
+            if hasText {
+                if large && !expanded {
+                    largeCollapsedBody
+                } else if large && expanded {
+                    largeExpandedBody
+                } else {
+                    smallRichBody
+                }
             }
         }
         .padding(.horizontal, large ? 10 : 12)
         .padding(.vertical, large ? 10 : 9)
         .background(isUser ? Color.accentColor.opacity(0.18) : Color.primary.opacity(0.06))
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    @ViewBuilder
+    private var attachmentsView: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(attachments) { att in
+                if att.isImage, let nsImg = NSImage(contentsOfFile: att.resolvedPath) {
+                    Button {
+                        NSWorkspace.shared.open(URL(fileURLWithPath: att.resolvedPath))
+                    } label: {
+                        Image(nsImage: nsImg)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxWidth: 260, maxHeight: 180)
+                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Open \(att.name)")
+                } else {
+                    Button {
+                        NSWorkspace.shared.open(URL(fileURLWithPath: att.resolvedPath))
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(spacing: 6) {
+                                Image(systemName: att.symbolName)
+                                    .font(.caption.weight(.semibold))
+                                Text(att.name)
+                                    .font(.caption.weight(.semibold))
+                                    .lineLimit(1)
+                                Text("· \(att.badgeLabel)")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            if att.kind == "audio", !att.text.isEmpty, !hasText {
+                                Text("“\(MessageMarkdown.preview(att.text, maxChars: 240, maxLines: 4))”")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(4)
+                            }
+                        }
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 6)
+                        .background(Color.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Open \(att.name)")
+                }
+            }
+        }
     }
 
     private var largeCollapsedBody: some View {

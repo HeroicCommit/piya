@@ -58,6 +58,7 @@ impl SendRequest {
                     .map(|m| crate::chat_service::ChatTurn {
                         role: m.role.clone(),
                         text: m.text.clone(),
+                        attachments: Vec::new(),
                     })
                     .collect();
                 converse_task(&self.settings, &turns, &self.text)
@@ -446,6 +447,7 @@ impl ChatWindow {
                     .map(|m| SessionMessage {
                         role: m.role.clone(),
                         text: m.text.clone(),
+                        attachments: Vec::new(),
                     })
                     .collect(),
             };

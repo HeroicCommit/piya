@@ -1,6 +1,8 @@
 import AppKit
+import Combine
 import Foundation
 import PiyaBindings
+import UniformTypeIdentifiers
 
 @MainActor
 final class ChatViewModel: ObservableObject {
@@ -13,12 +15,21 @@ final class ChatViewModel: ObservableObject {
     @Published var input = ""
     /// Full text of a large paste kept out of the TextField to avoid layout thrash.
     @Published var largePaste: String?
+    @Published var pendingAttachments: [AttachmentItem] = []
+    @Published var isStagingAttachment = false
+    @Published var isRecordingVoice = false
     @Published var isSending = false
     @Published var activityStatus: String?
     @Published var errorMessage: String?
     @Published var editingTask: TaskItem?
     /// Bumped when the active session's messages are replaced so the list can settle scroll.
     @Published private(set) var sessionContentEpoch: UInt64 = 0
+
+    let speech = SpeechDictationController()
+    private var speechCancellables: Set<AnyCancellable> = []
+    private var dictationBaseInput = ""
+    private var holdToTalkActive = false
+
     /// Invalidates a late reply if send times out, is stopped, or a newer send starts.
     private var sendGeneration: UInt64 = 0
     private var statusPoll: Task<Void, Never>?
@@ -35,6 +46,10 @@ final class ChatViewModel: ObservableObject {
         !outgoingText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    var hasOutgoingContent: Bool {
+        hasOutgoingText || !pendingAttachments.isEmpty
+    }
+
     /// Move oversized TextField content into the compact paste chip.
     func absorbLargeInputIfNeeded() {
         guard largePaste == nil, input.count > MessageMarkdown.composerCompactLimit else { return }
@@ -45,6 +60,7 @@ final class ChatViewModel: ObservableObject {
     func clearComposer() {
         input = ""
         largePaste = nil
+        pendingAttachments = []
     }
 
     func attachPasteFromClipboard() {
@@ -61,9 +77,157 @@ final class ChatViewModel: ObservableObject {
     }
 
     init() {
+        speech.$isRecording
+            .receive(on: RunLoop.main)
+            .sink { [weak self] rec in
+                self?.isRecordingVoice = rec
+            }
+            .store(in: &speechCancellables)
+
+        speech.$errorMessage
+            .compactMap { $0 }
+            .receive(on: RunLoop.main)
+            .sink { [weak self] err in
+                self?.errorMessage = err
+            }
+            .store(in: &speechCancellables)
+
         reloadSessions(selectActive: true)
         reloadTasks()
     }
+
+    // MARK: - Voice dictation & push-to-talk
+
+    func toggleVoiceDictation() {
+        if speech.isRecording {
+            speech.stop()
+            holdToTalkActive = false
+        } else {
+            beginDictation()
+        }
+    }
+
+    func startHoldToTalk() {
+        guard !holdToTalkActive, !speech.isRecording, panel == .chat else { return }
+        holdToTalkActive = true
+        beginDictation()
+    }
+
+    func stopHoldToTalk() {
+        guard holdToTalkActive else { return }
+        holdToTalkActive = false
+        speech.stop()
+    }
+
+    private func beginDictation() {
+        let existing = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        dictationBaseInput = existing.isEmpty ? "" : (existing + " ")
+        speech.start { [weak self] transcript in
+            guard let self else { return }
+            self.input = self.dictationBaseInput + transcript
+            self.absorbLargeInputIfNeeded()
+        }
+    }
+
+    // MARK: - Media & file attachments
+
+    func openAttachmentPicker() {
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        panel.canChooseFiles = true
+        panel.prompt = "Attach"
+        panel.message = "Attach images, PDFs, documents, CSVs, or audio files"
+        NSApp.activate(ignoringOtherApps: true)
+        if panel.runModal() == .OK, !panel.urls.isEmpty {
+            attachFileURLs(panel.urls)
+        }
+    }
+
+    func removePendingAttachment(_ id: String) {
+        pendingAttachments.removeAll { $0.id == id }
+    }
+
+    /// Returns `true` when the clipboard held files or an image (screenshot) and was staged.
+    func pasteAttachmentFromClipboard() -> Bool {
+        let pb = NSPasteboard.general
+        if let urls = pb.readObjects(
+            forClasses: [NSURL.self],
+            options: [.urlReadingFileURLsOnly: true]
+        ) as? [URL], !urls.isEmpty {
+            attachFileURLs(urls)
+            return true
+        }
+
+        if let pngData = Self.clipboardPNGData(from: pb) {
+            let stamp = Int(Date().timeIntervalSince1970)
+            let tempURL = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("Screenshot-\(stamp).png")
+            do {
+                try pngData.write(to: tempURL, options: .atomic)
+                attachFileURLs([tempURL], displayNameOverride: "Screenshot.png")
+                return true
+            } catch {
+                errorMessage = "Could not paste image: \(error.localizedDescription)"
+                return true
+            }
+        }
+        return false
+    }
+
+    private static func clipboardPNGData(from pb: NSPasteboard) -> Data? {
+        if let data = pb.data(forType: .png), !data.isEmpty {
+            return data
+        }
+        if let tiff = pb.data(forType: .tiff),
+           let rep = NSBitmapImageRep(data: tiff),
+           let png = rep.representation(using: .png, properties: [:])
+        {
+            return png
+        }
+        return nil
+    }
+
+    func attachFileURLs(_ urls: [URL], displayNameOverride: String? = nil) {
+        guard !urls.isEmpty else { return }
+        let sessionId = activeSessionId.isEmpty ? "active" : activeSessionId
+        isStagingAttachment = true
+        errorMessage = nil
+
+        Task.detached(priority: .userInitiated) {
+            var staged: [AttachmentItem] = []
+            var firstError: String?
+            for url in urls {
+                let extracted = await MediaExtractor.extractText(from: url)
+                do {
+                    let item = try PiyaBackend.stageAttachment(
+                        sessionId: sessionId,
+                        sourcePath: url.path,
+                        displayName: displayNameOverride ?? url.lastPathComponent,
+                        extractedText: extracted
+                    )
+                    staged.append(item)
+                } catch {
+                    if firstError == nil {
+                        firstError = error.localizedDescription
+                    }
+                }
+            }
+            let finalStaged = staged
+            let finalError = firstError
+            await MainActor.run {
+                self.isStagingAttachment = false
+                if !finalStaged.isEmpty {
+                    self.pendingAttachments.append(contentsOf: finalStaged)
+                }
+                if let finalError {
+                    self.errorMessage = finalError
+                }
+            }
+        }
+    }
+
+    // MARK: - Sessions & tasks
 
     func reloadSessions(selectActive: Bool) {
         do {
@@ -105,8 +269,6 @@ final class ChatViewModel: ObservableObject {
         refreshSessionList()
     }
 
-    /// Write only when leaving a session that may have unsaved edits.
-    /// Backend ignores no-op saves for `updated_at`; this avoids needless I/O.
     private func persistSessionIfNeeded() {
         persistSession()
     }
@@ -119,12 +281,12 @@ final class ChatViewModel: ObservableObject {
 
     func selectSession(_ id: String) {
         guard id != activeSessionId, !isSending else { return }
-        // Persist current chat only if content changed — selection alone must not
-        // bump "last updated" or reshuffle the sidebar.
+        if speech.isRecording { speech.stop() }
         persistSessionIfNeeded()
         do {
             try PiyaBackend.selectSession(id: id)
             activeSessionId = id
+            pendingAttachments = []
             loadActiveSessionContent(markEpoch: true)
             refreshSessionList()
         } catch {
@@ -134,10 +296,12 @@ final class ChatViewModel: ObservableObject {
 
     func newSession() {
         guard !isSending else { return }
+        if speech.isRecording { speech.stop() }
         persistSessionIfNeeded()
         do {
             let meta = try PiyaBackend.createSession()
             activeSessionId = meta.id
+            pendingAttachments = []
             resetWelcome()
             sessionContentEpoch &+= 1
             reloadSessions(selectActive: false)
@@ -189,15 +353,22 @@ final class ChatViewModel: ObservableObject {
     }
 
     static let welcome =
-        "Hey! I'm Piya 👋\nAsk me anything — run commands, use MCP, or queue background work."
+        "Hey! I'm Piya 👋\nAsk me anything — talk by voice, drop images/PDFs/audio, run commands, or queue work."
 
     func send() {
+        if speech.isRecording {
+            speech.stop()
+            holdToTalkActive = false
+        }
         let text = outgoingText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !isSending, panel == .chat else { return }
+        let attachments = pendingAttachments
+        guard (!text.isEmpty || !attachments.isEmpty), !isSending, !isStagingAttachment, panel == .chat else {
+            return
+        }
 
         clearComposer()
         errorMessage = nil
-        messages.append(ChatMessage(role: "user", text: text))
+        messages.append(ChatMessage(role: "user", text: text, attachments: attachments))
         persistSession()
         isSending = true
         activityStatus = nil
@@ -231,6 +402,7 @@ final class ChatViewModel: ObservableObject {
             do {
                 let reply = try PiyaBackend.send(
                     message: text,
+                    attachments: attachments,
                     history: Array(history)
                 )
                 await MainActor.run {

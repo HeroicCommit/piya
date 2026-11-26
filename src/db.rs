@@ -92,6 +92,26 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX IF NOT EXISTS idx_memories_created ON memories(created_at);
     "#,
+    // 2: full-text index on attachment names and extracted text / audio transcripts
+    r#"
+    CREATE VIRTUAL TABLE IF NOT EXISTS attachments_fts USING fts5(
+        name, text, content='attachments', content_rowid='rowid', tokenize='porter unicode61'
+    );
+    INSERT INTO attachments_fts(rowid, name, text)
+        SELECT rowid, name, COALESCE(text, '') FROM attachments;
+    CREATE TRIGGER IF NOT EXISTS attachments_ai AFTER INSERT ON attachments BEGIN
+        INSERT INTO attachments_fts(rowid, name, text) VALUES (new.rowid, new.name, COALESCE(new.text, ''));
+    END;
+    CREATE TRIGGER IF NOT EXISTS attachments_ad AFTER DELETE ON attachments BEGIN
+        INSERT INTO attachments_fts(attachments_fts, rowid, name, text)
+        VALUES ('delete', old.rowid, old.name, COALESCE(old.text, ''));
+    END;
+    CREATE TRIGGER IF NOT EXISTS attachments_au AFTER UPDATE OF name, text ON attachments BEGIN
+        INSERT INTO attachments_fts(attachments_fts, rowid, name, text)
+        VALUES ('delete', old.rowid, old.name, COALESCE(old.text, ''));
+        INSERT INTO attachments_fts(rowid, name, text) VALUES (new.rowid, new.name, COALESCE(new.text, ''));
+    END;
+    "#,
 ];
 
 fn migrate(conn: &Connection) -> Result<()> {

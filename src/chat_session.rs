@@ -12,10 +12,14 @@ use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-#[derive(Clone, Serialize, Deserialize)]
+use crate::attachments::ChatAttachment;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionMessage {
     pub role: String,
     pub text: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<ChatAttachment>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Default)]
@@ -154,27 +158,36 @@ impl ChatSessionStore {
             anyhow::bail!("unknown session {id}");
         };
         let tx = self.conn.transaction()?;
-        let existing = load_messages(&tx, id)?;
+        let existing = load_messages_with_ids(&tx, id)?;
         let now = now_unix();
         let mut changed = existing.len() != session.messages.len();
         for (seq, msg) in session.messages.iter().enumerate() {
             match existing.get(seq) {
-                Some(old) if old.role == msg.role && old.text == msg.text => {}
-                Some(_) => {
+                Some((msg_id, old))
+                    if old.role == msg.role
+                        && old.text == msg.text
+                        && old.attachments == msg.attachments =>
+                {
+                    let _ = msg_id;
+                }
+                Some((msg_id, _)) => {
                     changed = true;
                     tx.execute(
                         "UPDATE chat_messages SET role = ?1, text = ?2, created_at = ?3
                          WHERE session_id = ?4 AND seq = ?5",
                         params![msg.role, msg.text, now, id, seq as i64],
                     )?;
+                    sync_message_attachments(&tx, msg_id, &msg.attachments, now)?;
                 }
                 None => {
                     changed = true;
+                    let msg_id = Uuid::new_v4().to_string();
                     tx.execute(
                         "INSERT INTO chat_messages(id, session_id, seq, role, text, created_at)
                          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                        params![Uuid::new_v4().to_string(), id, seq as i64, msg.role, msg.text, now],
+                        params![msg_id, id, seq as i64, msg.role, msg.text, now],
                     )?;
+                    sync_message_attachments(&tx, &msg_id, &msg.attachments, now)?;
                 }
             }
         }
@@ -249,18 +262,83 @@ impl ChatSessionStore {
 }
 
 fn load_messages(conn: &Connection, session_id: &str) -> Result<Vec<SessionMessage>> {
+    Ok(load_messages_with_ids(conn, session_id)?
+        .into_iter()
+        .map(|(_, m)| m)
+        .collect())
+}
+
+fn load_messages_with_ids(
+    conn: &Connection,
+    session_id: &str,
+) -> Result<Vec<(String, SessionMessage)>> {
+    let mut att_stmt = conn.prepare(
+        "SELECT a.message_id, a.id, a.name, a.path, a.mime, a.kind, a.text
+         FROM attachments a
+         JOIN chat_messages m ON m.id = a.message_id
+         WHERE m.session_id = ?1
+         ORDER BY a.rowid",
+    )?;
+    let mut by_msg: std::collections::HashMap<String, Vec<ChatAttachment>> =
+        std::collections::HashMap::new();
+    let att_rows = att_stmt.query_map(params![session_id], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            ChatAttachment {
+                id: r.get(1)?,
+                name: r.get(2)?,
+                path: r.get(3)?,
+                mime: r.get(4)?,
+                kind: r.get(5)?,
+                text: r.get(6)?,
+            },
+        ))
+    })?;
+    for row in att_rows {
+        let (mid, att) = row?;
+        by_msg.entry(mid).or_default().push(att);
+    }
+
     let mut stmt = conn.prepare(
-        "SELECT role, text FROM chat_messages WHERE session_id = ?1 ORDER BY seq",
+        "SELECT id, role, text FROM chat_messages WHERE session_id = ?1 ORDER BY seq",
     )?;
     let rows = stmt
         .query_map(params![session_id], |r| {
-            Ok(SessionMessage {
-                role: r.get(0)?,
-                text: r.get(1)?,
-            })
+            let id: String = r.get(0)?;
+            let attachments = by_msg.remove(&id).unwrap_or_default();
+            Ok((
+                id,
+                SessionMessage {
+                    role: r.get(1)?,
+                    text: r.get(2)?,
+                    attachments,
+                },
+            ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
+}
+
+fn sync_message_attachments(
+    conn: &Connection,
+    message_id: &str,
+    attachments: &[ChatAttachment],
+    now: i64,
+) -> Result<()> {
+    conn.execute("DELETE FROM attachments WHERE message_id = ?1", params![message_id])?;
+    for att in attachments {
+        let id = if att.id.trim().is_empty() {
+            Uuid::new_v4().to_string()
+        } else {
+            att.id.clone()
+        };
+        conn.execute(
+            "INSERT OR REPLACE INTO attachments(id, message_id, name, path, mime, kind, text, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![id, message_id, att.name, att.path, att.mime, att.kind, att.text, now],
+        )?;
+    }
+    Ok(())
 }
 
 /// One-time import of JSON chats (multi-session folder, or the older single file).
@@ -364,7 +442,19 @@ fn title_for_session(session: &ChatSession) -> String {
         .messages
         .iter()
         .find(|m| m.role == "user")
-        .map(|m| truncate_title(&m.text))
+        .map(|m| {
+            if !m.text.trim().is_empty() {
+                truncate_title(&m.text)
+            } else if let Some(att) = m.attachments.first() {
+                if let Some(t) = att.text.as_deref().filter(|s| !s.trim().is_empty()) {
+                    truncate_title(t)
+                } else {
+                    truncate_title(&format!("📎 {}", att.name))
+                }
+            } else {
+                "New chat".into()
+            }
+        })
         .unwrap_or_else(|| "New chat".into())
 }
 
@@ -390,7 +480,48 @@ mod tests {
     }
 
     fn msg(role: &str, text: &str) -> SessionMessage {
-        SessionMessage { role: role.into(), text: text.into() }
+        SessionMessage {
+            role: role.into(),
+            text: text.into(),
+            attachments: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn attachments_persist_and_index_in_fts() {
+        let dir = temp_dir("session-att");
+        let mut store = ChatSessionStore::open(&dir).unwrap();
+        let id = store.active_id().to_string();
+        let session = ChatSession {
+            mode: "chat".into(),
+            messages: vec![SessionMessage {
+                role: "user".into(),
+                text: String::new(),
+                attachments: vec![ChatAttachment {
+                    id: "att-1".into(),
+                    name: "invoice.pdf".into(),
+                    path: "attachments/s/invoice.pdf".into(),
+                    mime: "application/pdf".into(),
+                    kind: "pdf".into(),
+                    text: Some("Vendor: Acme Cloud · Amount due: $420".into()),
+                }],
+            }],
+        };
+        store.save(&id, &session).unwrap();
+        assert_eq!(store.list()[0].title, "Vendor: Acme Cloud · Amount due: $420");
+        let back = store.load(&id).unwrap();
+        assert_eq!(back.messages[0].attachments.len(), 1);
+        assert_eq!(back.messages[0].attachments[0].name, "invoice.pdf");
+        let fts_hits: i64 = store
+            .conn
+            .query_row(
+                "SELECT count(*) FROM attachments_fts WHERE attachments_fts MATCH 'acme'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(fts_hits, 1);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]

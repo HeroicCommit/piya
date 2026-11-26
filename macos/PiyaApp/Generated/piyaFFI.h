@@ -433,9 +433,19 @@ RustBuffer uniffi_piya_fn_func_piya_send(RustBuffer message, RustBuffer mode, Ru
 void uniffi_piya_fn_func_piya_send_notification(RustBuffer title, RustBuffer body, RustCallStatus *_Nonnull out_status
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_SEND_WITH_ATTACHMENTS
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_SEND_WITH_ATTACHMENTS
+RustBuffer uniffi_piya_fn_func_piya_send_with_attachments(RustBuffer message, RustBuffer attachments, RustBuffer mode, RustBuffer history, RustCallStatus *_Nonnull out_status
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_SNOOZE_ALERT
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_SNOOZE_ALERT
 RustBuffer uniffi_piya_fn_func_piya_snooze_alert(RustBuffer title, RustBuffer body, uint32_t minutes, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_STAGE_ATTACHMENT
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_STAGE_ATTACHMENT
+RustBuffer uniffi_piya_fn_func_piya_stage_attachment(RustBuffer session_id, RustBuffer source_path, RustBuffer display_name, RustBuffer extracted_text, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_TEST_MAJOR_ALERT
@@ -949,9 +959,21 @@ uint16_t uniffi_piya_checksum_func_piya_send_notification(void
     
 );
 #endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_SEND_WITH_ATTACHMENTS
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_SEND_WITH_ATTACHMENTS
+uint16_t uniffi_piya_checksum_func_piya_send_with_attachments(void
+    
+);
+#endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_SNOOZE_ALERT
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_SNOOZE_ALERT
 uint16_t uniffi_piya_checksum_func_piya_snooze_alert(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_STAGE_ATTACHMENT
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_STAGE_ATTACHMENT
+uint16_t uniffi_piya_checksum_func_piya_stage_attachment(void
     
 );
 #endif

@@ -4,11 +4,13 @@
 //! answers stay in chat, reminders become schedules, only substantial work becomes
 //! a background task. There is no keyword routing in front of the model.
 
+use crate::attachments::{self, ChatAttachment};
 use crate::chat_engine;
 use crate::chat_tools::{
     background_tools, dispatch_builtin_tool, is_builtin_tool, openai_tools, schedule, system_hint,
 };
 use crate::config::Settings;
+use crate::llm::LlmTurn;
 use crate::prefs::UserPrefs;
 use crate::runtime;
 use crate::tasks::{Task, TaskQueue};
@@ -53,10 +55,11 @@ If something fails, say what failed in one sentence. Never invent results.";
 
 const HISTORY_LIMIT: usize = 20;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ChatTurn {
     pub role: String,
     pub text: String,
+    pub attachments: Vec<ChatAttachment>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,11 +82,24 @@ pub fn chat_reply_with_intent(
     user_text: &str,
     intent: ChatIntent,
 ) -> anyhow::Result<String> {
+    chat_reply_with_attachments(settings, history, user_text, &[], intent)
+}
+
+pub fn chat_reply_with_attachments(
+    settings: &Settings,
+    history: &[ChatTurn],
+    user_text: &str,
+    user_attachments: &[ChatAttachment],
+    intent: ChatIntent,
+) -> anyhow::Result<String> {
     let settings = settings.clone();
     let history = history.to_vec();
     let user_text = user_text.to_string();
+    let user_attachments = user_attachments.to_vec();
     let epoch = crate::chat_cancel::begin();
-    runtime::block_on(async move { reply_async(&settings, &history, &user_text, intent, epoch).await })
+    runtime::block_on(async move {
+        reply_async(&settings, &history, &user_text, &user_attachments, intent, epoch).await
+    })
 }
 
 /// Current local time, so the model can turn "at 6:30" / "in 2 hours" into exact times.
@@ -120,27 +136,70 @@ fn ledger_block(settings: &Settings) -> String {
     }
 }
 
+fn turn_to_llm(
+    role: &str,
+    text: &str,
+    atts: &[ChatAttachment],
+    settings: &Settings,
+    strict_images: bool,
+) -> anyhow::Result<LlmTurn> {
+    let mut parts: Vec<String> = Vec::new();
+    if !text.trim().is_empty() {
+        parts.push(text.to_string());
+    }
+    for att in atts {
+        parts.push(attachments::format_for_prompt(att, &settings.workspace));
+    }
+    let mut images = Vec::new();
+    if role == "user" {
+        for att in atts.iter().filter(|a| a.kind == "image") {
+            match attachments::load_image_input(att, &settings.data_dir) {
+                Ok(img) => images.push(img),
+                Err(err) if strict_images => return Err(err),
+                Err(err) => eprintln!("piya: skipped missing history image `{}`: {err}", att.name),
+            }
+        }
+    }
+    Ok(LlmTurn {
+        role: role.to_string(),
+        text: parts.join("\n\n"),
+        images,
+    })
+}
+
 async fn reply_async(
     settings: &Settings,
     history: &[ChatTurn],
     user_text: &str,
+    user_attachments: &[ChatAttachment],
     intent: ChatIntent,
     epoch: u64,
 ) -> anyhow::Result<String> {
     crate::chat_cancel::check(epoch)?;
 
+    let user_turn = turn_to_llm("user", user_text, user_attachments, settings, true)?;
+    let recall_seed: String = if !user_text.trim().is_empty() {
+        user_text.to_string()
+    } else {
+        user_turn.text.chars().take(600).collect()
+    };
+
     let (llm, memory) = chat_engine::llm_and_memory(settings)?;
     let prefs = UserPrefs::load(&settings.data_dir).unwrap_or_default();
 
-    let hits = match memory
-        .recall(user_text, crate::memory::RecallOpts::chat(6))
-        .await
-    {
-        Ok(hits) => hits,
-        Err(err) => {
-            // Don't fail the whole chat if memory/embeddings hiccup (e.g. oversized paste).
-            eprintln!("piya: memory recall skipped: {err}");
-            Vec::new()
+    let hits = if recall_seed.trim().is_empty() {
+        Vec::new()
+    } else {
+        match memory
+            .recall(&recall_seed, crate::memory::RecallOpts::chat(6))
+            .await
+        {
+            Ok(hits) => hits,
+            Err(err) => {
+                // Don't fail the whole chat if memory/embeddings hiccup (e.g. oversized paste).
+                eprintln!("piya: memory recall skipped: {err}");
+                Vec::new()
+            }
         }
     };
     let memory_context = crate::memory::VectorMemory::format_context(&hits);
@@ -199,22 +258,25 @@ async fn reply_async(
         system.push_str(TASK_MODE_HINT);
     }
 
-    let turn_history: Vec<(String, String)> = history
+    let recent: Vec<&ChatTurn> = history
         .iter()
         .rev()
         .take(HISTORY_LIMIT)
         .collect::<Vec<_>>()
         .into_iter()
         .rev()
-        .map(|m| (m.role.clone(), m.text.clone()))
         .collect();
+    let mut turn_history: Vec<LlmTurn> = Vec::with_capacity(recent.len());
+    for m in recent {
+        turn_history.push(turn_to_llm(&m.role, &m.text, &m.attachments, settings, false)?);
+    }
 
     let settings = settings.clone();
     let mut raw = llm
-        .chat_with_tools(
+        .chat_with_tools_rich(
             &system,
             &turn_history,
-            user_text,
+            &user_turn,
             &tools,
             |name, args| {
                 crate::chat_cancel::check(epoch)?;
@@ -232,17 +294,22 @@ async fn reply_async(
 
     if looks_like_unfilled_template(&raw) {
         eprintln!("piya: placeholder/template reply detected — retrying with stricter grounding");
-        let retry_user = format!(
-            "{user_text}\n\n[Piya system: Your last draft was invalid — it used unfilled \
-             placeholders like [Insert …] or asked the user for data you should fetch. \
-             Use your tools to get the real data. Answer ONLY with concrete facts from tool output. \
-             If tools fail, report the exact error. Do not output any [Insert …] brackets.]"
-        );
+        let retry_turn = LlmTurn {
+            role: "user".into(),
+            text: format!(
+                "{}\n\n[Piya system: Your last draft was invalid — it used unfilled \
+                 placeholders like [Insert …] or asked the user for data you should fetch. \
+                 Use your tools to get the real data. Answer ONLY with concrete facts from tool output. \
+                 If tools fail, report the exact error. Do not output any [Insert …] brackets.]",
+                user_turn.text
+            ),
+            images: user_turn.images.clone(),
+        };
         raw = llm
-            .chat_with_tools(
+            .chat_with_tools_rich(
                 &system,
                 &turn_history,
-                &retry_user,
+                &retry_turn,
                 &tools,
                 |name, args| {
                     crate::chat_cancel::check(epoch)?;

@@ -30,6 +30,7 @@ legacy-ui = ["dep:tray-icon", "dep:tao", "dep:wry"]
 [dependencies]
 anyhow = "1"
 async-openai = "0.28"
+base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 colored = "3"

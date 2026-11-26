@@ -565,6 +565,116 @@ public func FfiConverterTypeFfiAppEnvSettings_lower(_ value: FfiAppEnvSettings) 
 }
 
 
+public struct FfiAttachment {
+    public var id: String
+    public var name: String
+    public var path: String
+    public var resolvedPath: String
+    public var mime: String
+    public var kind: String
+    public var text: String
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: String, name: String, path: String, resolvedPath: String, mime: String, kind: String, text: String) {
+        self.id = id
+        self.name = name
+        self.path = path
+        self.resolvedPath = resolvedPath
+        self.mime = mime
+        self.kind = kind
+        self.text = text
+    }
+}
+
+#if compiler(>=6)
+extension FfiAttachment: Sendable {}
+#endif
+
+
+extension FfiAttachment: Equatable, Hashable {
+    public static func ==(lhs: FfiAttachment, rhs: FfiAttachment) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.name != rhs.name {
+            return false
+        }
+        if lhs.path != rhs.path {
+            return false
+        }
+        if lhs.resolvedPath != rhs.resolvedPath {
+            return false
+        }
+        if lhs.mime != rhs.mime {
+            return false
+        }
+        if lhs.kind != rhs.kind {
+            return false
+        }
+        if lhs.text != rhs.text {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(name)
+        hasher.combine(path)
+        hasher.combine(resolvedPath)
+        hasher.combine(mime)
+        hasher.combine(kind)
+        hasher.combine(text)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiAttachment: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiAttachment {
+        return
+            try FfiAttachment(
+                id: FfiConverterString.read(from: &buf), 
+                name: FfiConverterString.read(from: &buf), 
+                path: FfiConverterString.read(from: &buf), 
+                resolvedPath: FfiConverterString.read(from: &buf), 
+                mime: FfiConverterString.read(from: &buf), 
+                kind: FfiConverterString.read(from: &buf), 
+                text: FfiConverterString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiAttachment, into buf: inout [UInt8]) {
+        FfiConverterString.write(value.id, into: &buf)
+        FfiConverterString.write(value.name, into: &buf)
+        FfiConverterString.write(value.path, into: &buf)
+        FfiConverterString.write(value.resolvedPath, into: &buf)
+        FfiConverterString.write(value.mime, into: &buf)
+        FfiConverterString.write(value.kind, into: &buf)
+        FfiConverterString.write(value.text, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAttachment_lift(_ buf: RustBuffer) throws -> FfiAttachment {
+    return try FfiConverterTypeFfiAttachment.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiAttachment_lower(_ value: FfiAttachment) -> RustBuffer {
+    return FfiConverterTypeFfiAttachment.lower(value)
+}
+
+
 public struct FfiChatSession {
     public var mode: String
     public var messages: [FfiChatTurn]
@@ -724,12 +834,14 @@ public func FfiConverterTypeFfiChatSessionMeta_lower(_ value: FfiChatSessionMeta
 public struct FfiChatTurn {
     public var role: String
     public var text: String
+    public var attachments: [FfiAttachment]
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(role: String, text: String) {
+    public init(role: String, text: String, attachments: [FfiAttachment]) {
         self.role = role
         self.text = text
+        self.attachments = attachments
     }
 }
 
@@ -746,12 +858,16 @@ extension FfiChatTurn: Equatable, Hashable {
         if lhs.text != rhs.text {
             return false
         }
+        if lhs.attachments != rhs.attachments {
+            return false
+        }
         return true
     }
 
     public func hash(into hasher: inout Hasher) {
         hasher.combine(role)
         hasher.combine(text)
+        hasher.combine(attachments)
     }
 }
 
@@ -765,13 +881,15 @@ public struct FfiConverterTypeFfiChatTurn: FfiConverterRustBuffer {
         return
             try FfiChatTurn(
                 role: FfiConverterString.read(from: &buf), 
-                text: FfiConverterString.read(from: &buf)
+                text: FfiConverterString.read(from: &buf), 
+                attachments: FfiConverterSequenceTypeFfiAttachment.read(from: &buf)
         )
     }
 
     public static func write(_ value: FfiChatTurn, into buf: inout [UInt8]) {
         FfiConverterString.write(value.role, into: &buf)
         FfiConverterString.write(value.text, into: &buf)
+        FfiConverterSequenceTypeFfiAttachment.write(value.attachments, into: &buf)
     }
 }
 
@@ -2137,6 +2255,31 @@ fileprivate struct FfiConverterSequenceString: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeFfiAttachment: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiAttachment]
+
+    public static func write(_ value: [FfiAttachment], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiAttachment.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiAttachment] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiAttachment]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiAttachment.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterSequenceTypeFfiChatSessionMeta: FfiConverterRustBuffer {
     typealias SwiftType = [FfiChatSessionMeta]
 
@@ -2572,6 +2715,16 @@ public func piyaSendNotification(title: String, body: String)throws   {try rustC
     )
 }
 }
+public func piyaSendWithAttachments(message: String, attachments: [FfiAttachment], mode: FfiChatMode, history: [FfiChatTurn])throws  -> String  {
+    return try  FfiConverterString.lift(try rustCallWithError(FfiConverterTypePiyaError_lift) {
+    uniffi_piya_fn_func_piya_send_with_attachments(
+        FfiConverterString.lower(message),
+        FfiConverterSequenceTypeFfiAttachment.lower(attachments),
+        FfiConverterTypeFfiChatMode_lower(mode),
+        FfiConverterSequenceTypeFfiChatTurn.lower(history),$0
+    )
+})
+}
 /**
  * "Snooze" on a major alert: show it again (as a major alert) in `minutes`.
  */
@@ -2581,6 +2734,16 @@ public func piyaSnoozeAlert(title: String, body: String, minutes: UInt32)throws 
         FfiConverterString.lower(title),
         FfiConverterString.lower(body),
         FfiConverterUInt32.lower(minutes),$0
+    )
+})
+}
+public func piyaStageAttachment(sessionId: String, sourcePath: String, displayName: String, extractedText: String)throws  -> FfiAttachment  {
+    return try  FfiConverterTypeFfiAttachment_lift(try rustCallWithError(FfiConverterTypePiyaError_lift) {
+    uniffi_piya_fn_func_piya_stage_attachment(
+        FfiConverterString.lower(sessionId),
+        FfiConverterString.lower(sourcePath),
+        FfiConverterString.lower(displayName),
+        FfiConverterString.lower(extractedText),$0
     )
 })
 }
@@ -2751,7 +2914,13 @@ private let initializationResult: InitializationResult = {
     if (uniffi_piya_checksum_func_piya_send_notification() != 49358) {
         return InitializationResult.apiChecksumMismatch
     }
+    if (uniffi_piya_checksum_func_piya_send_with_attachments() != 42507) {
+        return InitializationResult.apiChecksumMismatch
+    }
     if (uniffi_piya_checksum_func_piya_snooze_alert() != 7408) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_piya_checksum_func_piya_stage_attachment() != 30895) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_piya_checksum_func_piya_test_major_alert() != 28471) {

@@ -19,11 +19,14 @@ use async_openai::{
     error::OpenAIError,
     types::{
         ChatCompletionMessageToolCall, ChatCompletionRequestAssistantMessage,
-        ChatCompletionRequestMessage, ChatCompletionRequestSystemMessage,
+        ChatCompletionRequestMessage, ChatCompletionRequestMessageContentPartImage,
+        ChatCompletionRequestMessageContentPartText, ChatCompletionRequestSystemMessage,
         ChatCompletionRequestToolMessage, ChatCompletionRequestToolMessageContent,
-        ChatCompletionRequestUserMessage, ChatCompletionResponseMessage, ChatCompletionTool,
-        ChatCompletionToolChoiceOption, ChatCompletionToolType, CreateChatCompletionRequestArgs,
-        CreateEmbeddingRequestArgs, FunctionCall, ResponseFormat, Role,
+        ChatCompletionRequestUserMessage, ChatCompletionRequestUserMessageContent,
+        ChatCompletionRequestUserMessageContentPart, ChatCompletionResponseMessage,
+        ChatCompletionTool, ChatCompletionToolChoiceOption, ChatCompletionToolType,
+        CreateChatCompletionRequestArgs, CreateEmbeddingRequestArgs, FunctionCall, ImageUrl,
+        ResponseFormat, Role,
     },
     Client,
 };
@@ -32,12 +35,26 @@ use serde_json::{json, Value};
 use crate::config::Settings;
 use crate::providers::{self, Api, Connection};
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ImageInput {
+    pub media_type: String,
+    pub base64_data: String,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct LlmTurn {
+    pub role: String,
+    pub text: String,
+    pub images: Vec<ImageInput>,
+}
+
 #[derive(Clone)]
 pub struct LlmClient {
     inner: Arc<Inner>,
 }
 
 struct Inner {
+    provider_id: String,
     backend: Backend,
     model: String,
     label: String,
@@ -104,6 +121,7 @@ impl LlmClient {
         };
         Ok(Self {
             inner: Arc::new(Inner {
+                provider_id: conn.provider.to_ascii_lowercase(),
                 backend,
                 model: settings.model.trim().to_string(),
                 label: info.label.to_string(),
@@ -159,20 +177,83 @@ impl LlmClient {
         history: &[(String, String)],
         user: &str,
         tools: &[ChatCompletionTool],
+        on_tool: impl FnMut(&str, &str) -> Result<String>,
+        temperature: f32,
+        max_rounds: usize,
+        cancel_epoch: Option<u64>,
+    ) -> Result<String> {
+        let rich_history: Vec<LlmTurn> = history
+            .iter()
+            .map(|(role, text)| LlmTurn {
+                role: role.clone(),
+                text: text.clone(),
+                images: Vec::new(),
+            })
+            .collect();
+        let rich_user = LlmTurn {
+            role: "user".into(),
+            text: user.to_string(),
+            images: Vec::new(),
+        };
+        self.chat_with_tools_rich(
+            system,
+            &rich_history,
+            &rich_user,
+            tools,
+            on_tool,
+            temperature,
+            max_rounds,
+            cancel_epoch,
+        )
+        .await
+    }
+
+    /// Multi-turn chat with tools and optional image inputs (vision).
+    #[allow(clippy::too_many_arguments)]
+    pub async fn chat_with_tools_rich(
+        &self,
+        system: &str,
+        history: &[LlmTurn],
+        user: &LlmTurn,
+        tools: &[ChatCompletionTool],
         mut on_tool: impl FnMut(&str, &str) -> Result<String>,
         temperature: f32,
         max_rounds: usize,
         cancel_epoch: Option<u64>,
     ) -> Result<String> {
-        let mut messages = Self::build_messages(system, history, user);
+        if !user.images.is_empty() && self.is_known_text_only() {
+            return Err(self.vision_unsupported_error(None));
+        }
 
-        for _ in 0..max_rounds {
+        // If the current model is known text-only, strip any old history images up front
+        // so switching models mid-conversation does not break text follow-ups.
+        let include_history_images = !self.is_known_text_only();
+        let mut messages = Self::build_rich_messages(system, history, user, include_history_images);
+        let history_had_images = include_history_images && history.iter().any(|t| !t.images.is_empty());
+
+        for round in 0..max_rounds {
             if let Some(epoch) = cancel_epoch {
                 crate::chat_cancel::check(epoch)?;
             }
-            let assistant = self
+            let assistant = match self
                 .complete(messages.clone(), Some(tools), temperature, false, cancel_epoch)
-                .await?;
+                .await
+            {
+                Ok(msg) => msg,
+                Err(err) if looks_like_vision_rejection(&err) => {
+                    if !user.images.is_empty() {
+                        return Err(self.vision_unsupported_error(Some(&err)));
+                    }
+                    if round == 0 && history_had_images {
+                        messages = Self::build_rich_messages(system, history, user, false);
+                        self.complete(messages.clone(), Some(tools), temperature, false, cancel_epoch)
+                            .await?
+                    } else {
+                        return Err(err);
+                    }
+                }
+                Err(err) => return Err(err),
+            };
 
             let tool_calls = assistant.tool_calls.clone().unwrap_or_default();
             if tool_calls.is_empty() {
@@ -207,6 +288,27 @@ impl LlmClient {
         }
 
         Err(anyhow!("tool loop exceeded {max_rounds} rounds"))
+    }
+
+    fn is_known_text_only(&self) -> bool {
+        let p = self.inner.provider_id.as_str();
+        let m = self.inner.model.to_ascii_lowercase();
+        p == "deepseek"
+            || m.starts_with("deepseek-chat")
+            || m.starts_with("deepseek-reasoner")
+            || m.starts_with("gpt-3.5")
+            || m == "o1-mini"
+            || m == "o3-mini"
+    }
+
+    fn vision_unsupported_error(&self, cause: Option<&anyhow::Error>) -> anyhow::Error {
+        let detail = cause
+            .map(|e| format!(" ({e:#})"))
+            .unwrap_or_default();
+        anyhow!(
+            "{} cannot read images{detail}. Switch to a vision-capable model (such as GPT-4o / GPT-4.1, Claude, Gemini, or an Ollama vision model like llava or qwen2.5vl) in Settings → Models.",
+            self.describe()
+        )
     }
 
     async fn complete(
@@ -329,18 +431,53 @@ impl LlmClient {
         history: &[(String, String)],
         user: &str,
     ) -> Vec<ChatCompletionRequestMessage> {
+        let rich_history: Vec<LlmTurn> = history
+            .iter()
+            .map(|(role, content)| LlmTurn {
+                role: role.clone(),
+                text: content.clone(),
+                images: Vec::new(),
+            })
+            .collect();
+        let rich_user = LlmTurn {
+            role: "user".into(),
+            text: user.to_string(),
+            images: Vec::new(),
+        };
+        Self::build_rich_messages(system, &rich_history, &rich_user, false)
+    }
+
+    fn build_rich_messages(
+        system: &str,
+        history: &[LlmTurn],
+        user: &LlmTurn,
+        include_history_images: bool,
+    ) -> Vec<ChatCompletionRequestMessage> {
         let mut messages = vec![ChatCompletionRequestMessage::System(
             ChatCompletionRequestSystemMessage {
                 content: system.into(),
                 name: None,
             },
         )];
-        for (role, content) in history {
-            match role.as_str() {
-                "user" => messages.push(user_message(content)),
+        // Keep raw base64 images only on the most recent history image turn so payloads stay small.
+        let last_img_idx = if include_history_images {
+            history.iter().rposition(|t| !t.images.is_empty())
+        } else {
+            None
+        };
+        for (idx, turn) in history.iter().enumerate() {
+            match turn.role.as_str() {
+                "user" => {
+                    let imgs: &[ImageInput] = if Some(idx) == last_img_idx {
+                        &turn.images
+                    } else {
+                        &[]
+                    };
+                    messages.push(user_turn_message(&turn.text, imgs));
+                }
                 "assistant" | "piya" => messages.push(ChatCompletionRequestMessage::Assistant(
                     ChatCompletionRequestAssistantMessage {
-                        content: Some(content.clone().into()),
+                        content: Some(turn.text.clone().into()),
                         name: None,
                         tool_calls: None,
                         refusal: None,
@@ -352,7 +489,7 @@ impl LlmClient {
                 _ => {}
             }
         }
-        messages.push(user_message(user));
+        messages.push(user_turn_message(&user.text, &user.images));
         messages
     }
 
@@ -391,10 +528,51 @@ impl LlmClient {
 }
 
 fn user_message(text: &str) -> ChatCompletionRequestMessage {
+    user_turn_message(text, &[])
+}
+
+fn user_turn_message(text: &str, images: &[ImageInput]) -> ChatCompletionRequestMessage {
+    if images.is_empty() {
+        return ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage {
+            content: text.to_string().into(),
+            name: None,
+        });
+    }
+    let mut parts: Vec<ChatCompletionRequestUserMessageContentPart> = Vec::new();
+    let prompt_text = if text.trim().is_empty() {
+        "Inspect the attached image(s) and respond.".to_string()
+    } else {
+        text.to_string()
+    };
+    parts.push(ChatCompletionRequestUserMessageContentPart::Text(
+        ChatCompletionRequestMessageContentPartText { text: prompt_text },
+    ));
+    for img in images {
+        parts.push(ChatCompletionRequestUserMessageContentPart::ImageUrl(
+            ChatCompletionRequestMessageContentPartImage {
+                image_url: ImageUrl {
+                    url: format!("data:{};base64,{}", img.media_type, img.base64_data),
+                    detail: None,
+                },
+            },
+        ));
+    }
     ChatCompletionRequestMessage::User(ChatCompletionRequestUserMessage {
-        content: text.to_string().into(),
+        content: ChatCompletionRequestUserMessageContent::Array(parts),
         name: None,
     })
+}
+
+fn looks_like_vision_rejection(err: &anyhow::Error) -> bool {
+    let lower = format!("{err:#}").to_ascii_lowercase();
+    lower.contains("image_url")
+        || lower.contains("does not support image")
+        || lower.contains("cannot read image")
+        || lower.contains("vision")
+        || lower.contains("multimodal")
+        || lower.contains("expected a string")
+        || lower.contains("content must be a string")
+        || (lower.contains("image") && (lower.contains("unsupported") || lower.contains("not support") || lower.contains("invalid")))
 }
 
 /// Parse a JSON object reply, tolerating ```json fences or prose around it
@@ -437,6 +615,53 @@ fn content_text(content: Option<&Value>) -> String {
     }
 }
 
+/// User content blocks for Anthropic Messages API (text + base64 images).
+fn anthropic_user_blocks(content: Option<&Value>) -> Vec<Value> {
+    match content {
+        Some(Value::String(s)) => {
+            if s.trim().is_empty() {
+                Vec::new()
+            } else {
+                vec![json!({"type": "text", "text": s})]
+            }
+        }
+        Some(Value::Array(parts)) => {
+            let mut out = Vec::new();
+            for part in parts {
+                match part.get("type").and_then(|t| t.as_str()) {
+                    Some("text") => {
+                        if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
+                            if !t.trim().is_empty() {
+                                out.push(json!({"type": "text", "text": t}));
+                            }
+                        }
+                    }
+                    Some("image_url") => {
+                        if let Some(url) = part.pointer("/image_url/url").and_then(|u| u.as_str()) {
+                            if let Some((meta, b64)) = url
+                                .strip_prefix("data:")
+                                .and_then(|rest| rest.split_once(";base64,"))
+                            {
+                                out.push(json!({
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": meta,
+                                        "data": b64,
+                                    }
+                                }));
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            out
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// Convert OpenAI-format messages + tools into an Anthropic Messages request body.
 pub fn anthropic_request(
     model: &str,
@@ -468,10 +693,7 @@ pub fn anthropic_request(
                     system.push(text);
                 }
             }
-            "user" => push(
-                "user",
-                if text.trim().is_empty() { vec![] } else { vec![json!({"type": "text", "text": text})] },
-            ),
+            "user" => push("user", anthropic_user_blocks(v.get("content"))),
             "assistant" => {
                 let mut blocks = Vec::new();
                 if !text.trim().is_empty() {
@@ -819,5 +1041,25 @@ mod anthropic_tests {
         assert_eq!(parse_json_reply("```json\n{\"a\":1}\n```").unwrap()["a"], 1);
         assert_eq!(parse_json_reply("Here you go: {\"a\":2} thanks").unwrap()["a"], 2);
         assert!(parse_json_reply("no json").is_err());
+    }
+
+    #[test]
+    fn converts_image_turn_to_anthropic_vision_block() {
+        let user = LlmTurn {
+            role: "user".into(),
+            text: "What error is shown?".into(),
+            images: vec![ImageInput {
+                media_type: "image/png".into(),
+                base64_data: "iVBORw0KGgo=".into(),
+            }],
+        };
+        let msgs = LlmClient::build_rich_messages("Sys", &[], &user, true);
+        let body = anthropic_request("claude-sonnet-4-0", &msgs, None, None, false, 1024).unwrap();
+        let blocks = body["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0]["type"], "text");
+        assert_eq!(blocks[1]["type"], "image");
+        assert_eq!(blocks[1]["source"]["media_type"], "image/png");
+        assert_eq!(blocks[1]["source"]["data"], "iVBORw0KGgo=");
     }
 }

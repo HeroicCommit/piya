@@ -135,16 +135,34 @@ final class HummingbirdPanelController: NSObject, NSWindowDelegate {
     }
 
     private func registerHotkey() {
-        // ⌃⌘Space — Hummingbird shortcut (local monitor; global requires accessibility permission).
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+        // ⌃⌘Space — toggle Hummingbird; ⌃⇧Space (hold) — push-to-talk dictation.
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .keyUp, .flagsChanged]) { [weak self] event in
+            guard let self else { return event }
             let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-            if flags == [.control, .command], event.charactersIgnoringModifiers == " " {
-                self?.toggle()
-                return nil
-            }
-            if event.keyCode == 53 { // Esc
-                self?.hide()
-                return nil
+
+            if event.type == .keyDown {
+                if flags == [.control, .command], event.charactersIgnoringModifiers == " " {
+                    self.toggle()
+                    return nil
+                }
+                if flags == [.control, .shift], event.keyCode == 49 { // Space
+                    if !event.isARepeat {
+                        self.model.startHoldToTalk()
+                    }
+                    return nil
+                }
+                if event.keyCode == 53 { // Esc
+                    if self.model.isRecordingVoice {
+                        self.model.toggleVoiceDictation()
+                    } else {
+                        self.hide()
+                    }
+                    return nil
+                }
+            } else if event.type == .keyUp, event.keyCode == 49 {
+                self.model.stopHoldToTalk()
+            } else if event.type == .flagsChanged, !flags.contains(.control) || !flags.contains(.shift) {
+                self.model.stopHoldToTalk()
             }
             return event
         }

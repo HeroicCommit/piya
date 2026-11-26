@@ -7,7 +7,6 @@ use crate::chat_session::{ChatSession, SessionMessage};
 use crate::config::{self, Settings};
 use crate::mcp_config::{McpConfig, McpServerEntry};
 use crate::tasks::{TaskQueue, TaskStatus};
-use crate::ui::assign::{converse_task, spawn_if_needed};
 
 #[derive(uniffi::Enum, Clone, Debug)]
 pub enum FfiChatMode {
@@ -47,9 +46,49 @@ fn load_settings() -> Result<Settings, PiyaError> {
 }
 
 #[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiAttachment {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub resolved_path: String,
+    pub mime: String,
+    pub kind: String,
+    pub text: String,
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
 pub struct FfiChatTurn {
     pub role: String,
     pub text: String,
+    pub attachments: Vec<FfiAttachment>,
+}
+
+fn att_to_ffi(a: crate::attachments::ChatAttachment, data_dir: &std::path::Path) -> FfiAttachment {
+    let resolved_path = a.resolve_path(data_dir).display().to_string();
+    FfiAttachment {
+        id: a.id,
+        name: a.name,
+        path: a.path,
+        resolved_path,
+        mime: a.mime,
+        kind: a.kind,
+        text: a.text.unwrap_or_default(),
+    }
+}
+
+fn ffi_to_att(a: FfiAttachment) -> crate::attachments::ChatAttachment {
+    crate::attachments::ChatAttachment {
+        id: a.id,
+        name: a.name,
+        path: a.path,
+        mime: a.mime,
+        kind: a.kind,
+        text: if a.text.trim().is_empty() {
+            None
+        } else {
+            Some(a.text)
+        },
+    }
 }
 
 #[derive(uniffi::Record, Clone, Debug)]
@@ -113,7 +152,7 @@ fn meta_to_ffi(m: crate::chat_session::SessionMeta) -> FfiChatSessionMeta {
     }
 }
 
-fn session_to_ffi(session: ChatSession) -> FfiChatSession {
+fn session_to_ffi(session: ChatSession, data_dir: &std::path::Path) -> FfiChatSession {
     FfiChatSession {
         mode: session.mode,
         messages: session
@@ -122,6 +161,11 @@ fn session_to_ffi(session: ChatSession) -> FfiChatSession {
             .map(|m| FfiChatTurn {
                 role: m.role,
                 text: m.text,
+                attachments: m
+                    .attachments
+                    .into_iter()
+                    .map(|a| att_to_ffi(a, data_dir))
+                    .collect(),
             })
             .collect(),
     }
@@ -135,6 +179,7 @@ fn turns_to_session(mode: String, messages: Vec<FfiChatTurn>) -> ChatSession {
             .map(|m| SessionMessage {
                 role: m.role,
                 text: m.text,
+                attachments: m.attachments.into_iter().map(ffi_to_att).collect(),
             })
             .collect(),
     }
@@ -212,7 +257,7 @@ pub fn piya_load_chat_session() -> Result<FfiChatSession, PiyaError> {
     let session = store.load_active().map_err(|err| PiyaError::Chat {
         message: err.to_string(),
     })?;
-    Ok(session_to_ffi(session))
+    Ok(session_to_ffi(session, &settings.data_dir))
 }
 
 #[uniffi::export]
@@ -230,6 +275,27 @@ pub fn piya_save_chat_session(mode: String, messages: Vec<FfiChatTurn>) -> Resul
 }
 
 #[uniffi::export]
+pub fn piya_stage_attachment(
+    session_id: String,
+    source_path: String,
+    display_name: String,
+    extracted_text: String,
+) -> Result<FfiAttachment, PiyaError> {
+    let settings = load_settings()?;
+    let att = crate::attachments::stage_attachment(
+        &settings,
+        &session_id,
+        std::path::Path::new(&source_path),
+        (!display_name.trim().is_empty()).then_some(display_name.as_str()),
+        (!extracted_text.trim().is_empty()).then_some(extracted_text.as_str()),
+    )
+    .map_err(|err| PiyaError::Chat {
+        message: format!("{err:#}"),
+    })?;
+    Ok(att_to_ffi(att, &settings.data_dir))
+}
+
+#[uniffi::export]
 pub fn piya_chat(message: String, history: Vec<FfiChatTurn>) -> Result<String, PiyaError> {
     piya_send(message, FfiChatMode::Chat, history)
 }
@@ -240,26 +306,35 @@ pub fn piya_send(
     mode: FfiChatMode,
     history: Vec<FfiChatTurn>,
 ) -> Result<String, PiyaError> {
+    piya_send_with_attachments(message, Vec::new(), mode, history)
+}
+
+#[uniffi::export]
+pub fn piya_send_with_attachments(
+    message: String,
+    attachments: Vec<FfiAttachment>,
+    mode: FfiChatMode,
+    history: Vec<FfiChatTurn>,
+) -> Result<String, PiyaError> {
     let settings = load_settings()?;
     let turns: Vec<ChatTurn> = history
         .into_iter()
         .map(|t| ChatTurn {
             role: t.role,
             text: t.text,
+            attachments: t.attachments.into_iter().map(ffi_to_att).collect(),
         })
         .collect();
-    match mode {
-        FfiChatMode::Chat => {
-            chat_service::chat_reply(&settings, &turns, &message).map_err(|err| PiyaError::Chat {
-                message: format!("{err:#}"),
-            })
-        }
-        FfiChatMode::Task => {
-            let outcome = converse_task(&settings, &turns, &message);
-            spawn_if_needed(&settings, &outcome);
-            Ok(outcome.reply)
-        }
-    }
+    let user_atts: Vec<crate::attachments::ChatAttachment> =
+        attachments.into_iter().map(ffi_to_att).collect();
+    let intent = match mode {
+        FfiChatMode::Chat => chat_service::ChatIntent::Chat,
+        FfiChatMode::Task => chat_service::ChatIntent::Task,
+    };
+    chat_service::chat_reply_with_attachments(&settings, &turns, &message, &user_atts, intent)
+        .map_err(|err| PiyaError::Chat {
+            message: format!("{err:#}"),
+        })
 }
 
 #[derive(uniffi::Record, Clone, Debug)]

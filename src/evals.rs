@@ -351,6 +351,7 @@ fn run_case(base: &Settings, case: &Case, root: &Path) -> Result<Result<(), Stri
         .map(|(r, t)| ChatTurn {
             role: r.to_string(),
             text: t.to_string(),
+            attachments: Vec::new(),
         })
         .collect();
 
