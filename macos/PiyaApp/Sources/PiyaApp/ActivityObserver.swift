@@ -27,6 +27,7 @@ final class ActivityObserver: ObservableObject {
 
     private var timer: Timer?
     private var workspaceTokens: [NSObjectProtocol] = []
+    private var appTokens: [NSObjectProtocol] = []
     private var pendingSwitchWork: DispatchWorkItem?
     private var isScreenAsleep = false
     private var lastOcrAt: Date = .distantPast
@@ -96,6 +97,20 @@ final class ActivityObserver: ObservableObject {
             }
         )
 
+        let appCenter = NotificationCenter.default
+        appTokens.append(
+            appCenter.addObserver(
+                forName: NSApplication.didBecomeActiveNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    self?.reloadSettings()
+                    await self?.refreshPermissionsAsync()
+                }
+            }
+        )
+
         let t = Timer.scheduledTimer(withTimeInterval: Self.heartbeatSeconds, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.heartbeat()
@@ -107,7 +122,7 @@ final class ActivityObserver: ObservableObject {
 
         // Take an initial snapshot shortly after launch.
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-            self?.sampleCurrentFrontmost(forceOcrIfFull: false)
+            self?.sampleCurrentFrontmost(forceOcrIfFull: true)
         }
     }
 
@@ -121,6 +136,11 @@ final class ActivityObserver: ObservableObject {
             wsCenter.removeObserver(tok)
         }
         workspaceTokens.removeAll()
+        let appCenter = NotificationCenter.default
+        for tok in appTokens {
+            appCenter.removeObserver(tok)
+        }
+        appTokens.removeAll()
     }
 
     func reloadSettings() {
@@ -131,7 +151,34 @@ final class ActivityObserver: ObservableObject {
 
     func refreshPermissions() {
         hasAccessibilityPermission = AXIsProcessTrusted()
+        if CGPreflightScreenCaptureAccess() {
+            hasScreenCapturePermission = true
+        }
+        Task { @MainActor in
+            await self.refreshPermissionsAsync()
+        }
+    }
+
+    func refreshPermissionsAsync() async {
+        hasAccessibilityPermission = AXIsProcessTrusted()
+        if CGPreflightScreenCaptureAccess() {
+            hasScreenCapturePermission = true
+            return
+        }
+        // Only probe SCShareableContent silently if CGPreflight already passed;
+        // calling SCShareableContent when denied triggers macOS's system prompt.
         hasScreenCapturePermission = CGPreflightScreenCaptureAccess()
+    }
+
+    func relaunchApp() {
+        let bundleURL = Bundle.main.bundleURL
+        let config = NSWorkspace.OpenConfiguration()
+        config.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(at: bundleURL, configuration: config) { _, _ in
+            DispatchQueue.main.async {
+                NSApplication.shared.terminate(nil)
+            }
+        }
     }
 
     func requestAccessibilityPermission() {
@@ -215,6 +262,10 @@ final class ActivityObserver: ObservableObject {
     }
 
     private func sample(app: NSRunningApplication, forceOcrIfFull: Bool, ignoreIdle: Bool) {
+        reloadSettings()
+        hasAccessibilityPermission = AXIsProcessTrusted()
+        hasScreenCapturePermission = CGPreflightScreenCaptureAccess()
+
         if !ignoreIdle && Self.secondsSinceUserInput() > Self.maxIdleSeconds {
             return
         }
@@ -316,7 +367,7 @@ final class ActivityObserver: ObservableObject {
             axText = ax.bodyText
         }
 
-        let finalTitle = !axTitle.isEmpty ? axTitle : cgTitle
+        var finalTitle = !axTitle.isEmpty ? axTitle : cgTitle
         let windowKey = "\(bundleId)|\(cgWindowId ?? 0)|\(finalTitle)"
 
         if mode == "app_only" {
@@ -332,15 +383,19 @@ final class ActivityObserver: ObservableObject {
 
         // 3. In `full` mode, run on-device Vision OCR if AX text is sparse or window changed
         var screenText = axText
-        var captureKind = "text_only"
+        var captureKind = mode == "full" && allowOcr ? "full" : "text_only"
         var didRunOcr = false
 
-        if allowOcr, let winId = cgWindowId {
+        if allowOcr {
             let elapsed = Date().timeIntervalSince(lastOcrAt)
             let windowChanged = windowKey != lastOcrKey
             let sparseAx = axText.count < 100
             if forceOcr || (sparseAx && (windowChanged || elapsed >= minOcrInterval)) || (windowChanged && elapsed >= minOcrInterval) {
-                if let ocrText = await recognizeWindowTextViaVision(windowID: winId), !ocrText.isEmpty {
+                let scResult = await recognizeWindowTextViaVision(pid: pid, windowID: cgWindowId)
+                if !scResult.title.isEmpty && finalTitle.isEmpty {
+                    finalTitle = scResult.title
+                }
+                if let ocrText = scResult.text, !ocrText.isEmpty {
                     didRunOcr = true
                     captureKind = "full"
                     if axText.isEmpty {
@@ -357,7 +412,7 @@ final class ActivityObserver: ObservableObject {
             urlOrPath: urlOrPath,
             screenText: screenText,
             captureKind: captureKind,
-            windowKey: windowKey,
+            windowKey: "\(bundleId)|\(cgWindowId ?? 0)|\(finalTitle)",
             didRunOcr: didRunOcr
         )
     }
@@ -368,19 +423,21 @@ final class ActivityObserver: ObservableObject {
             return (nil, "")
         }
         for info in list {
-            guard let ownerPid = info[kCGWindowOwnerPID as String] as? pid_t, ownerPid == pid else {
+            guard let ownerPid = (info[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value,
+                  ownerPid == pid
+            else {
                 continue
             }
-            let layer = (info[kCGWindowLayer as String] as? Int) ?? 0
+            let layer = (info[kCGWindowLayer as String] as? NSNumber)?.intValue ?? 0
             if layer != 0 { continue }
-            let alpha = (info[kCGWindowAlpha as String] as? Double) ?? 1.0
+            let alpha = (info[kCGWindowAlpha as String] as? NSNumber)?.doubleValue ?? 1.0
             if alpha <= 0.05 { continue }
             if let bounds = info[kCGWindowBounds as String] as? [String: Any] {
-                let w = (bounds["Width"] as? Double) ?? 0
-                let h = (bounds["Height"] as? Double) ?? 0
+                let w = (bounds["Width"] as? NSNumber)?.doubleValue ?? 0
+                let h = (bounds["Height"] as? NSNumber)?.doubleValue ?? 0
                 if w < 120 || h < 80 { continue }
             }
-            let winId = (info[kCGWindowNumber as String] as? UInt32).map { CGWindowID($0) }
+            let winId = (info[kCGWindowNumber as String] as? NSNumber).map { CGWindowID($0.uint32Value) }
             let title = (info[kCGWindowName as String] as? String)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             return (winId, title)
@@ -525,12 +582,34 @@ final class ActivityObserver: ObservableObject {
 
     // MARK: - ScreenCaptureKit + Apple Vision on-device OCR (image discarded immediately)
 
-    private nonisolated static func recognizeWindowTextViaVision(windowID: CGWindowID) async -> String? {
+    private struct VisionCaptureResult: Sendable {
+        var title: String
+        var text: String?
+    }
+
+    private nonisolated static func recognizeWindowTextViaVision(
+        pid: pid_t,
+        windowID: CGWindowID?
+    ) async -> VisionCaptureResult {
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-            guard let scWindow = content.windows.first(where: { $0.windowID == windowID }) else {
-                return nil
+            let scWindow: SCWindow? = {
+                if let windowID, let exact = content.windows.first(where: { $0.windowID == windowID }) {
+                    return exact
+                }
+                return content.windows
+                    .filter {
+                        $0.owningApplication?.processID == pid
+                            && $0.windowLayer == 0
+                            && $0.frame.width >= 120
+                            && $0.frame.height >= 80
+                    }
+                    .max(by: { ($0.frame.width * $0.frame.height) < ($1.frame.width * $1.frame.height) })
+            }()
+            guard let scWindow else {
+                return VisionCaptureResult(title: "", text: nil)
             }
+            let scTitle = (scWindow.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             let filter = SCContentFilter(desktopIndependentWindow: scWindow)
             let config = SCStreamConfiguration()
             let w = Int(scWindow.frame.width.clamped(to: 320...1920))
@@ -554,10 +633,10 @@ final class ActivityObserver: ObservableObject {
             let lines = (request.results ?? [])
                 .compactMap { $0.topCandidates(1).first?.string.trimmingCharacters(in: .whitespacesAndNewlines) }
                 .filter { $0.count >= 2 }
-            if lines.isEmpty { return nil }
-            return String(lines.joined(separator: "\n").prefix(5_000))
+            let joined = lines.isEmpty ? nil : String(lines.joined(separator: "\n").prefix(5_000))
+            return VisionCaptureResult(title: scTitle, text: joined)
         } catch {
-            return nil
+            return VisionCaptureResult(title: "", text: nil)
         }
     }
 }

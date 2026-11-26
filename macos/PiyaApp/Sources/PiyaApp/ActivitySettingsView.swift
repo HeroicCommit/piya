@@ -5,7 +5,6 @@ import SwiftUI
 struct ActivitySettingsTab: View {
     @ObservedObject private var observer = ActivityObserver.shared
 
-    @State private var mode = "text_only"
     @State private var retentionDays: UInt32 = 30
     @State private var excludedApps: [String] = []
     @State private var newExcludedApp = ""
@@ -52,6 +51,10 @@ struct ActivitySettingsTab: View {
         (0, "Keep detailed history indefinitely"),
     ]
 
+    private var activeMode: String {
+        observer.settings.mode
+    }
+
     var body: some View {
         Form {
             captureModeSection
@@ -63,36 +66,52 @@ struct ActivitySettingsTab: View {
         .formStyle(.grouped)
         .padding()
         .onAppear(perform: loadAll)
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            loadAll()
+        }
     }
 
     // MARK: - Sections
 
     private var captureModeSection: some View {
         Section {
-            Picker("Capture mode", selection: Binding(
-                get: { mode },
-                set: { newMode in
-                    mode = newMode
-                    persistSettings()
-                    if newMode == "full" && !observer.hasScreenCapturePermission {
-                        observer.requestScreenCapturePermission()
-                    }
-                }
-            )) {
-                ForEach(modes, id: \.0) { id, title, _ in
-                    Text(title).tag(id)
-                }
-            }
-            .pickerStyle(.radioGroup)
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(modes, id: \.0) { id, title, subtitle in
+                    let isSelected = activeMode == id
+                    Button {
+                        selectMode(id)
+                    } label: {
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                                .font(.system(size: 15, weight: .semibold))
+                                .padding(.top, 2)
 
-            if let desc = modes.first(where: { $0.0 == mode })?.2 {
-                Text(desc)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(title)
+                                    .font(.callout.weight(isSelected ? .semibold : .regular))
+                                    .foregroundStyle(.primary)
+                                Text(subtitle)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 8)
+                        .contentShape(Rectangle())
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(isSelected ? Color.accentColor.opacity(0.10) : Color.clear)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
             }
 
             HStack(spacing: 10) {
-                if observer.settings.isPaused && mode != "off" {
+                if observer.settings.isPaused && activeMode != "off" {
                     Label("Paused", systemImage: "pause.circle.fill")
                         .font(.caption)
                         .foregroundStyle(.orange)
@@ -101,11 +120,11 @@ struct ActivitySettingsTab: View {
                         status = "Activity tracking resumed."
                     }
                     .controlSize(.small)
-                } else if mode != "off" {
+                } else if activeMode != "off" {
                     Label(
                         observer.lastObservedLabel.isEmpty
-                            ? "Active — watching foreground window changes"
-                            : "Last seen: \(observer.lastObservedLabel)",
+                            ? "Active (\(modeDisplayName(activeMode))) — watching foreground window changes"
+                            : "Last seen (\(modeDisplayName(activeMode))): \(observer.lastObservedLabel)",
                         systemImage: "record.circle"
                     )
                     .font(.caption)
@@ -130,12 +149,12 @@ struct ActivitySettingsTab: View {
     }
 
     private var permissionsSection: some View {
-        Section("macOS Permissions") {
+        Section {
             HStack {
                 Label(
                     observer.hasAccessibilityPermission
-                        ? "Accessibility granted (window titles & text)"
-                        : "Accessibility needed for window titles & Text Only / Full modes",
+                        ? "Accessibility granted (window titles, URLs & window text)"
+                        : "Accessibility not active yet (needed for URLs & Text Only mode)",
                     systemImage: observer.hasAccessibilityPermission ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
                 )
                 .font(.callout)
@@ -151,12 +170,12 @@ struct ActivitySettingsTab: View {
                 }
             }
 
-            if mode == "full" {
+            if activeMode == "full" {
                 HStack {
                     Label(
                         observer.hasScreenCapturePermission
-                            ? "Screen Recording granted (on-device Vision OCR)"
-                            : "Screen Recording needed for Full mode OCR",
+                            ? "Screen Recording granted (Full mode Vision OCR active)"
+                            : "Screen Recording not active in this session",
                         systemImage: observer.hasScreenCapturePermission ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
                     )
                     .font(.callout)
@@ -165,7 +184,7 @@ struct ActivitySettingsTab: View {
                     Spacer()
 
                     if !observer.hasScreenCapturePermission {
-                        Button("Grant Screen Recording…") {
+                        Button("Open Screen Recording…") {
                             observer.requestScreenCapturePermission()
                         }
                         .controlSize(.small)
@@ -173,10 +192,27 @@ struct ActivitySettingsTab: View {
                 }
             }
 
-            Button("Refresh Permission Status") {
-                observer.refreshPermissions()
+            HStack(spacing: 10) {
+                Button("Refresh Status") {
+                    observer.refreshPermissions()
+                    reloadTimeline()
+                }
+                .controlSize(.small)
+
+                if !observer.hasAccessibilityPermission || (activeMode == "full" && !observer.hasScreenCapturePermission) {
+                    Button("Relaunch Piya to Apply") {
+                        observer.relaunchApp()
+                    }
+                    .controlSize(.small)
+                }
             }
-            .controlSize(.small)
+        } header: {
+            Text("macOS Permissions")
+        } footer: {
+            if !observer.hasAccessibilityPermission || (activeMode == "full" && !observer.hasScreenCapturePermission) {
+                Text("Tip: If Piya is already toggled ON in System Settings from an earlier update, toggle Piya OFF and back ON once (then click Relaunch Piya to Apply) so macOS updates the permission for the new build.")
+                    .font(.caption)
+            }
         }
     }
 
@@ -186,7 +222,7 @@ struct ActivitySettingsTab: View {
                 get: { retentionDays },
                 set: { days in
                     retentionDays = days
-                    persistSettings()
+                    persistSettings(mode: activeMode)
                 }
             )) {
                 ForEach(retentionChoices, id: \.0) { days, label in
@@ -202,7 +238,7 @@ struct ActivitySettingsTab: View {
                 if !excludedApps.isEmpty {
                     FlowExcludedTags(items: excludedApps) { removed in
                         excludedApps.removeAll { $0 == removed }
-                        persistSettings()
+                        persistSettings(mode: activeMode)
                     }
                 }
 
@@ -316,6 +352,9 @@ struct ActivitySettingsTab: View {
                                 .foregroundStyle(.secondary)
                             Text(ev.appName)
                                 .font(.callout.weight(.medium))
+                            Text(ev.captureMode == "full" ? "Full" : (ev.captureMode == "app_only" ? "App" : "Text"))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
                             Text(Self.formatDuration(ev.durationSec))
                                 .font(.caption2)
                                 .padding(.horizontal, 6)
@@ -352,11 +391,25 @@ struct ActivitySettingsTab: View {
 
     // MARK: - Helpers
 
+    private func modeDisplayName(_ raw: String) -> String {
+        switch raw {
+        case "full": return "Full"
+        case "app_only": return "App Only"
+        default: return "Text Only"
+        }
+    }
+
+    private func selectMode(_ newMode: String) {
+        persistSettings(mode: newMode)
+        if newMode == "full" && !observer.hasScreenCapturePermission {
+            observer.requestScreenCapturePermission()
+        }
+    }
+
     private func loadAll() {
         observer.reloadSettings()
         observer.refreshPermissions()
         let s = observer.settings
-        mode = s.mode
         retentionDays = s.retentionDays
         excludedApps = s.excludedApps
         reloadTimeline()
@@ -368,14 +421,14 @@ struct ActivitySettingsTab: View {
         }
     }
 
-    private func persistSettings() {
+    private func persistSettings(mode: String) {
         do {
             try observer.saveSettings(
                 mode: mode,
                 retentionDays: retentionDays,
                 excludedApps: excludedApps
             )
-            status = "Saved."
+            status = "Saved (\(modeDisplayName(mode)))."
         } catch {
             status = error.localizedDescription
         }
@@ -386,7 +439,7 @@ struct ActivitySettingsTab: View {
         guard !trimmed.isEmpty else { return }
         if !excludedApps.contains(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) {
             excludedApps.append(trimmed)
-            persistSettings()
+            persistSettings(mode: activeMode)
         }
         newExcludedApp = ""
     }
