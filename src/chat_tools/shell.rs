@@ -92,9 +92,13 @@ mod tests {
     #[test]
     fn runs_pwd() {
         let settings = Settings {
-            openai_api_key: String::new(),
-            openai_base_url: String::new(),
+            provider: "openai".into(),
+            api_key: String::new(),
+            base_url: String::new(),
             model: String::new(),
+            embed_provider: "none".into(),
+            embed_api_key: String::new(),
+            embed_base_url: String::new(),
             embedding_model: String::new(),
             workspace: PathBuf::from("/tmp/piya-shell-test"),
             data_dir: PathBuf::from("/tmp/piya-shell-test"),

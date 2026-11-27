@@ -7,6 +7,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.accessory)
         TaskNotificationWatcher.shared.start()
         DueTaskScheduler.shared.start()
+        Task { @MainActor in
+            ActivityObserver.shared.start()
+            UpdateController.shared.startBackgroundChecks()
+        }
         if CommandLine.arguments.contains("--open-chat") {
             DispatchQueue.main.async {
                 HummingbirdPanelController.shared.show()
@@ -29,14 +33,18 @@ private struct SettingsMenuButton: View {
 
     var body: some View {
         Button("Settings…") {
-            NSApp.activate(ignoringOtherApps: true)
-            openSettings()
-            // The window is created asynchronously; raise it right away and again
-            // shortly after in case it appeared late.
-            DispatchQueue.main.async { Self.raiseSettingsWindow() }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { Self.raiseSettingsWindow() }
+            Self.openAndRaiseSettings(using: openSettings)
         }
         .keyboardShortcut(",")
+    }
+
+    static func openAndRaiseSettings(using openSettings: OpenSettingsAction) {
+        NSApp.activate(ignoringOtherApps: true)
+        openSettings()
+        // The window is created asynchronously; raise it right away and again
+        // shortly after in case it appeared late.
+        DispatchQueue.main.async { raiseSettingsWindow() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { raiseSettingsWindow() }
     }
 
     private static func raiseSettingsWindow() {
@@ -57,9 +65,42 @@ private struct SettingsMenuButton: View {
     }
 }
 
+private struct CheckForUpdatesMenuButton: View {
+    @Environment(\.openSettings) private var openSettings
+    @ObservedObject private var updater = UpdateController.shared
+
+    var body: some View {
+        Button(label) {
+            updater.selectedSettingsTab = .general
+            SettingsMenuButton.openAndRaiseSettings(using: openSettings)
+            updater.check(silent: false)
+        }
+    }
+
+    private var label: String {
+        if let v = updater.availableVersion {
+            return "Update Available (v\(v))…"
+        }
+        return "Check for Updates…"
+    }
+}
+
+private struct ActivitySettingsMenuButton: View {
+    let label: String
+    @Environment(\.openSettings) private var openSettings
+
+    var body: some View {
+        Button(label) {
+            UpdateController.shared.selectedSettingsTab = .activity
+            SettingsMenuButton.openAndRaiseSettings(using: openSettings)
+        }
+    }
+}
+
 @main
 struct PiyaApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    @ObservedObject private var activity = ActivityObserver.shared
 
     var body: some Scene {
         MenuBarExtra {
@@ -68,7 +109,35 @@ struct PiyaApp: App {
             }
             .keyboardShortcut(" ", modifiers: [.control, .command])
 
+            Divider()
+
+            if activity.settings.mode == "off" {
+                ActivitySettingsMenuButton(label: "Activity Tracking: Off…")
+            } else if activity.settings.isPaused {
+                Button("Resume Activity Tracking") {
+                    activity.pause(minutes: 0)
+                }
+            } else if activity.needsPermissionAttention {
+                ActivitySettingsMenuButton(
+                    label: "⚠️ Activity OCR Needs macOS Permission…"
+                )
+            } else {
+                Menu("Activity Tracking: On (\(Self.modeLabel(activity.settings.mode)))") {
+                    ActivitySettingsMenuButton(label: "View Today's Work Threads…")
+                    Divider()
+                    Button("Pause for 1 Hour") {
+                        activity.pause(minutes: 60)
+                    }
+                    Button("Pause for Rest of Today") {
+                        activity.pause(minutes: 12 * 60)
+                    }
+                }
+            }
+
+            Divider()
+
             SettingsMenuButton()
+            CheckForUpdatesMenuButton()
 
             Divider()
 
@@ -82,6 +151,14 @@ struct PiyaApp: App {
 
         Settings {
             SettingsView()
+        }
+    }
+
+    private static func modeLabel(_ raw: String) -> String {
+        switch raw {
+        case "full": return "Full"
+        case "app_only": return "App Only"
+        default: return "Text Only"
         }
     }
 

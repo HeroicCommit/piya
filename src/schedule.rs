@@ -306,7 +306,7 @@ fn normalize_weekday(s: &str) -> String {
     }
 }
 
-fn parse_weekday(s: &str) -> Option<Weekday> {
+pub fn parse_weekday(s: &str) -> Option<Weekday> {
     match s.to_lowercase().as_str() {
         "monday" | "mon" => Some(Weekday::Mon),
         "tuesday" | "tue" => Some(Weekday::Tue),

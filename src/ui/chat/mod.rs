@@ -49,11 +49,20 @@ pub enum IpcDispatch {
 
 impl SendRequest {
     pub fn run(self) -> SendComplete {
-        let queue = TaskQueue::new(self.data_dir.join("piya.db"))
-            .expect("open task queue for send");
         let outcome = match self.mode {
             ChatMode::Chat => conversation::reply(&self.settings, &self.history, &self.text),
-            ChatMode::Task => converse_task(&queue, &self.settings, &self.text),
+            ChatMode::Task => {
+                let turns: Vec<crate::chat_service::ChatTurn> = self
+                    .history
+                    .iter()
+                    .map(|m| crate::chat_service::ChatTurn {
+                        role: m.role.clone(),
+                        text: m.text.clone(),
+                        attachments: Vec::new(),
+                    })
+                    .collect();
+                converse_task(&self.settings, &turns, &self.text)
+            }
         };
         SendComplete {
             outcome,
@@ -438,6 +447,7 @@ impl ChatWindow {
                     .map(|m| SessionMessage {
                         role: m.role.clone(),
                         text: m.text.clone(),
+                        attachments: Vec::new(),
                     })
                     .collect(),
             };

@@ -7,9 +7,15 @@ struct ComposerTextView: NSViewRepresentable {
     @Binding var text: String
     var onSubmit: () -> Void
     var onLargePaste: () -> Void
+    var onPasteAttachment: (() -> Bool)? = nil
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, onSubmit: onSubmit, onLargePaste: onLargePaste)
+        Coordinator(
+            text: $text,
+            onSubmit: onSubmit,
+            onLargePaste: onLargePaste,
+            onPasteAttachment: onPasteAttachment
+        )
     }
 
     func makeNSView(context: Context) -> ComposerNSTextField {
@@ -28,6 +34,9 @@ struct ComposerTextView: NSViewRepresentable {
         field.onLargePaste = { [coord = context.coordinator] in
             coord.onLargePaste()
         }
+        field.onPasteAttachment = { [coord = context.coordinator] in
+            coord.onPasteAttachment?() ?? false
+        }
         field.target = context.coordinator
         field.action = #selector(Coordinator.submit(_:))
         DispatchQueue.main.async {
@@ -39,8 +48,12 @@ struct ComposerTextView: NSViewRepresentable {
     func updateNSView(_ field: ComposerNSTextField, context: Context) {
         context.coordinator.onSubmit = onSubmit
         context.coordinator.onLargePaste = onLargePaste
+        context.coordinator.onPasteAttachment = onPasteAttachment
         field.onLargePaste = { [coord = context.coordinator] in
             coord.onLargePaste()
+        }
+        field.onPasteAttachment = { [coord = context.coordinator] in
+            coord.onPasteAttachment?() ?? false
         }
         if field.stringValue != text, field.currentEditor() == nil || text.isEmpty {
             field.stringValue = text
@@ -55,11 +68,18 @@ struct ComposerTextView: NSViewRepresentable {
         var text: Binding<String>
         var onSubmit: () -> Void
         var onLargePaste: () -> Void
+        var onPasteAttachment: (() -> Bool)?
 
-        init(text: Binding<String>, onSubmit: @escaping () -> Void, onLargePaste: @escaping () -> Void) {
+        init(
+            text: Binding<String>,
+            onSubmit: @escaping () -> Void,
+            onLargePaste: @escaping () -> Void,
+            onPasteAttachment: (() -> Bool)?
+        ) {
             self.text = text
             self.onSubmit = onSubmit
             self.onLargePaste = onLargePaste
+            self.onPasteAttachment = onPasteAttachment
         }
 
         func controlTextDidChange(_ obj: Notification) {
@@ -75,6 +95,7 @@ struct ComposerTextView: NSViewRepresentable {
 
 final class ComposerNSTextField: NSTextField {
     var onLargePaste: (() -> Void)?
+    var onPasteAttachment: (() -> Bool)?
 
     override var acceptsFirstResponder: Bool { true }
 
@@ -85,8 +106,18 @@ final class ComposerNSTextField: NSTextField {
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "v" {
-            if let clip = NSPasteboard.general.string(forType: .string),
-               clip.count > MessageMarkdown.composerCompactLimit {
+            let pb = NSPasteboard.general
+            let hasFiles = (pb.readObjects(
+                forClasses: [NSURL.self],
+                options: [.urlReadingFileURLsOnly: true]
+            ) as? [URL])?.isEmpty == false
+            let hasImage = pb.data(forType: .png) != nil || pb.data(forType: .tiff) != nil
+            if (hasFiles || hasImage), onPasteAttachment?() == true {
+                return true
+            }
+            if let clip = pb.string(forType: .string),
+               clip.count > MessageMarkdown.composerCompactLimit
+            {
                 onLargePaste?()
                 return true
             }

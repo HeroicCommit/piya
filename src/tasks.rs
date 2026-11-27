@@ -54,6 +54,64 @@ impl TaskStatus {
     }
 }
 
+/// What a queued row is. Reminders and actions are schedules; tasks run the OPPAR loop.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskKind {
+    /// Substantial background work (plan → act → review).
+    Task,
+    /// Show `description` as a notification at `run_at`. No LLM.
+    Reminder,
+    /// Run `description` as a short agent instruction at `run_at` and notify the result.
+    Action,
+}
+
+impl TaskKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Task => "task",
+            Self::Reminder => "reminder",
+            Self::Action => "action",
+        }
+    }
+
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "reminder" => Self::Reminder,
+            "action" => Self::Action,
+            _ => Self::Task,
+        }
+    }
+}
+
+/// Fields for inserting a row; everything except title/description is optional.
+#[derive(Clone, Debug)]
+pub struct NewTask<'a> {
+    pub title: &'a str,
+    pub description: &'a str,
+    pub kind: TaskKind,
+    pub priority: i32,
+    pub tags: &'a str,
+    pub run_at: Option<&'a str>,
+    pub recurrence: Option<&'a str>,
+    pub done_when: Option<&'a str>,
+}
+
+impl<'a> NewTask<'a> {
+    pub fn new(title: &'a str, description: &'a str, kind: TaskKind) -> Self {
+        Self {
+            title,
+            description,
+            kind,
+            priority: 1,
+            tags: "",
+            run_at: None,
+            recurrence: None,
+            done_when: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct Task {
     pub id: String,
@@ -72,6 +130,20 @@ pub struct Task {
     pub run_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub recurrence: Option<String>,
+    pub kind: TaskKind,
+    /// Checkable completion condition for background tasks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub done_when: Option<String>,
+}
+
+impl Task {
+    pub fn is_schedule(&self) -> bool {
+        self.kind != TaskKind::Task || self.run_at.is_some() || self.recurrence.is_some()
+    }
+
+    pub fn short_id(&self) -> &str {
+        &self.id[..self.id.len().min(8)]
+    }
 }
 
 #[derive(Clone)]
@@ -151,10 +223,16 @@ impl TaskQueue {
             conn.execute("ALTER TABLE tasks ADD COLUMN recurrence TEXT", [])?;
         }
         // Worker ownership: which worker runs the task and when it last proved it is alive.
-        for col in ["worker_id", "claimed_at", "heartbeat_at"] {
+        for col in ["worker_id", "claimed_at", "heartbeat_at", "done_when"] {
             if !cols.iter().any(|c| c == col) {
                 conn.execute(&format!("ALTER TABLE tasks ADD COLUMN {col} TEXT"), [])?;
             }
+        }
+        if !cols.iter().any(|c| c == "kind") {
+            conn.execute(
+                "ALTER TABLE tasks ADD COLUMN kind TEXT NOT NULL DEFAULT 'task'",
+                [],
+            )?;
         }
         Ok(())
     }
@@ -170,15 +248,7 @@ impl TaskQueue {
         priority: i32,
         tags: &str,
     ) -> Result<Task> {
-        let (run_at, recurrence) = crate::schedule::encode_for_task(description);
-        self.add_with_schedule(
-            title,
-            description,
-            priority,
-            tags,
-            run_at.as_deref(),
-            recurrence.as_deref(),
-        )
+        self.add_with_schedule(title, description, priority, tags, None, None)
     }
 
     pub fn add_with_run_at(
@@ -201,18 +271,98 @@ impl TaskQueue {
         run_at: Option<&str>,
         recurrence: Option<&str>,
     ) -> Result<Task> {
+        self.insert(&NewTask {
+            title,
+            description,
+            kind: TaskKind::Task,
+            priority,
+            tags,
+            run_at,
+            recurrence,
+            done_when: None,
+        })
+    }
+
+    pub fn insert(&self, new: &NewTask<'_>) -> Result<Task> {
         let id = Uuid::new_v4().to_string();
         let now = Self::now();
         let conn = self.connect()?;
         conn.execute(
             "
             INSERT INTO tasks (id, title, description, status, priority, attempts,
-                               best_accuracy, tags, created_at, updated_at, run_at, recurrence)
-            VALUES (?1, ?2, ?3, 'pending', ?4, 0, 0, ?5, ?6, ?6, ?7, ?8)
+                               best_accuracy, tags, created_at, updated_at, run_at, recurrence,
+                               kind, done_when)
+            VALUES (?1, ?2, ?3, 'pending', ?4, 0, 0, ?5, ?6, ?6, ?7, ?8, ?9, ?10)
             ",
-            params![id, title, description, priority, tags, now, run_at, recurrence],
+            params![
+                id,
+                new.title,
+                new.description,
+                new.priority,
+                new.tags,
+                now,
+                new.run_at,
+                new.recurrence,
+                new.kind.as_str(),
+                new.done_when
+            ],
         )?;
-        self.get(&id)
+        self.get_exact(&id)
+    }
+
+    /// Pending reminders/actions and future-dated tasks, soonest first.
+    pub fn list_schedules(&self, limit: i32) -> Result<Vec<Task>> {
+        let conn = self.connect()?;
+        let mut stmt = conn.prepare(
+            "
+            SELECT * FROM tasks
+            WHERE status IN ('pending', 'in_progress')
+              AND (kind IN ('reminder', 'action') OR run_at IS NOT NULL OR recurrence IS NOT NULL)
+            ORDER BY CASE WHEN run_at IS NULL THEN 1 ELSE 0 END, run_at ASC, created_at ASC
+            LIMIT ?1
+            ",
+        )?;
+        let rows = stmt.query_map(params![limit], row_to_task)?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .context("list schedules")
+    }
+
+    /// Change when (and how often) a pending schedule fires, and/or its message.
+    pub fn update_schedule(
+        &self,
+        id: &str,
+        run_at: Option<&str>,
+        recurrence: Option<Option<&str>>,
+        title: Option<&str>,
+        description: Option<&str>,
+    ) -> Result<Task> {
+        let task = self.get(id)?;
+        if task.status != TaskStatus::Pending {
+            anyhow::bail!(
+                "`{}` is {} — only pending schedules can be changed",
+                task.short_id(),
+                task.status.as_str()
+            );
+        }
+        let new_run_at = run_at.map(str::to_string).or(task.run_at.clone());
+        let new_recurrence = match recurrence {
+            Some(r) => r.map(str::to_string),
+            None => task.recurrence.clone(),
+        };
+        let conn = self.connect()?;
+        conn.execute(
+            "UPDATE tasks SET run_at = ?1, recurrence = ?2, title = ?3, description = ?4,
+                    updated_at = ?5 WHERE id = ?6",
+            params![
+                new_run_at,
+                new_recurrence,
+                title.unwrap_or(&task.title),
+                description.unwrap_or(&task.description),
+                Self::now(),
+                task.id
+            ],
+        )?;
+        self.get_exact(&task.id)
     }
 
     /// After a recurring task finishes, queue the next occurrence.
@@ -238,8 +388,12 @@ impl TaskQueue {
     }
 
     pub fn get(&self, id: &str) -> Result<Task> {
+        let id = id.trim();
         if let Ok(task) = self.get_exact(id) {
             return Ok(task);
+        }
+        if id.len() < 4 {
+            anyhow::bail!("task not found: `{id}` (use at least the first 4 characters of the id)");
         }
         self.find_by_prefix(id)?
             .ok_or_else(|| anyhow::anyhow!("task not found: {id}"))
@@ -555,15 +709,30 @@ impl TaskQueue {
         let task = self.get(id)?;
         match task.status {
             TaskStatus::Done | TaskStatus::Failed | TaskStatus::Blocked => {
-                anyhow::bail!("task `{}` is already finished", id);
+                anyhow::bail!(
+                    "`{}` ({}) is already {} — nothing to cancel",
+                    task.short_id(),
+                    task.title,
+                    task.status.as_str()
+                );
             }
             TaskStatus::InProgress | TaskStatus::Pending => self.update_status(
-                id,
+                &task.id,
                 TaskStatus::Blocked,
                 Some("cancelled by user"),
                 None,
             ),
         }
+    }
+
+    pub fn set_tags(&self, id: &str, tags: &str) -> Result<Task> {
+        let task = self.get(id)?;
+        let conn = self.connect()?;
+        conn.execute(
+            "UPDATE tasks SET tags = ?1, updated_at = ?2 WHERE id = ?3",
+            params![tags, Self::now(), task.id],
+        )?;
+        self.get_exact(&task.id)
     }
 
     pub fn update_details(
@@ -627,6 +796,8 @@ fn row_to_task(row: &rusqlite::Row<'_>) -> rusqlite::Result<Task> {
         updated_at: row.get("updated_at")?,
         run_at: row.get("run_at")?,
         recurrence: row.get("recurrence")?,
+        kind: TaskKind::parse(&row.get::<_, Option<String>>("kind")?.unwrap_or_default()),
+        done_when: row.get("done_when")?,
     })
 }
 

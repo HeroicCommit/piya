@@ -1,31 +1,20 @@
-//! Embedded vector memory backed by LanceDB (local directory under `data/memory.lance`).
+//! Vector memory in SQLite (`memories` table in `piya.db`).
 //!
-//! On first open, rows from the legacy SQLite `memory.db` are migrated automatically.
+//! Embeddings are stored as little-endian f32 blobs and ranked by brute-force cosine
+//! similarity, which takes milliseconds for thousands of notes. Each row records the
+//! embeddings model that produced it; when the model changes, rows are re-embedded.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use anyhow::{anyhow, Context, Result};
-use arrow_array::{
-    Array, ArrayRef, FixedSizeListArray, Float32Array, Float64Array, Int64Array, RecordBatch,
-    RecordBatchIterator, RecordBatchReader, StringArray,
-};
-use arrow_schema::{DataType, Field, Schema};
+use anyhow::{Context, Result};
 use chrono::Utc;
-use futures::TryStreamExt;
-use lancedb::query::{ExecutableQuery, QueryBase};
-use lancedb::table::OptimizeAction;
-use lancedb::{connect, DistanceType, Table};
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 use tokio::sync::OnceCell;
 use uuid::Uuid;
 
+use crate::db;
 use crate::llm::LlmClient;
-
-/// Default OpenAI `text-embedding-3-small` dimensionality.
-const DEFAULT_DIM: i32 = 1536;
-const TABLE_NAME: &str = "memories";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MemoryKind {
@@ -141,127 +130,100 @@ impl RecallOpts {
 
 #[derive(Clone)]
 pub struct VectorMemory {
-    inner: Arc<VectorMemoryInner>,
+    inner: Arc<Inner>,
 }
 
-struct VectorMemoryInner {
-    lance_dir: PathBuf,
-    legacy_sqlite: PathBuf,
+struct Inner {
+    data_dir: PathBuf,
     llm: LlmClient,
-    dim: i32,
-    table: OnceCell<Table>,
-    writes_since_optimize: AtomicUsize,
+    ready: OnceCell<()>,
+    /// Set when rows were embedded with another model and re-embedding failed.
+    stale: std::sync::Mutex<Option<String>>,
 }
 
 impl VectorMemory {
     pub fn new(data_dir: impl AsRef<Path>, llm: LlmClient) -> Result<Self> {
-        let data_dir = data_dir.as_ref();
-        let lance_dir = data_dir.join("memory.lance");
-        std::fs::create_dir_all(&lance_dir)
-            .with_context(|| format!("create {}", lance_dir.display()))?;
+        let data_dir = data_dir.as_ref().to_path_buf();
+        db::open(&data_dir)?;
         Ok(Self {
-            inner: Arc::new(VectorMemoryInner {
-                lance_dir,
-                legacy_sqlite: data_dir.join("memory.db"),
+            inner: Arc::new(Inner {
+                data_dir,
                 llm,
-                dim: DEFAULT_DIM,
-                table: OnceCell::new(),
-                writes_since_optimize: AtomicUsize::new(0),
+                ready: OnceCell::new(),
+                stale: std::sync::Mutex::new(None),
             }),
         })
     }
 
-    async fn table(&self) -> Result<&Table> {
+    fn conn(&self) -> Result<Connection> {
+        db::open(&self.inner.data_dir)
+    }
+
+    /// Ensure every row was embedded with the current embeddings model.
+    async fn ensure_ready(&self) -> Result<()> {
         self.inner
-            .table
-            .get_or_try_init(|| async { self.open_or_create().await })
-            .await
-    }
-
-    async fn open_or_create(&self) -> Result<Table> {
-        let uri = self
-            .inner
-            .lance_dir
-            .to_str()
-            .ok_or_else(|| anyhow!("memory.lance path is not valid UTF-8"))?;
-        let db = connect(uri).execute().await.context("connect LanceDB")?;
-
-        let names = db.table_names().execute().await.context("list LanceDB tables")?;
-        let table = if names.iter().any(|n| n == TABLE_NAME) {
-            db.open_table(TABLE_NAME)
-                .execute()
-                .await
-                .context("open memories table")?
-        } else {
-            let schema = memories_schema(self.inner.dim);
-            let empty = RecordBatch::new_empty(schema.clone());
-            let batches: Box<dyn RecordBatchReader + Send> =
-                Box::new(RecordBatchIterator::new(vec![Ok(empty)], schema));
-            db.create_table(TABLE_NAME, batches)
-                .execute()
-                .await
-                .context("create memories table")?
-        };
-
-        let count = table.count_rows(None).await.unwrap_or(0);
-        if count == 0 && self.inner.legacy_sqlite.is_file() {
-            if let Err(err) =
-                migrate_sqlite_into(&table, &self.inner.legacy_sqlite, self.inner.dim).await
-            {
-                eprintln!("piya: LanceDB migration from memory.db skipped: {err}");
-            } else {
-                let bak = self.inner.legacy_sqlite.with_extension("db.bak");
-                let _ = std::fs::rename(&self.inner.legacy_sqlite, &bak);
-                eprintln!(
-                    "piya: migrated vector memory from SQLite → LanceDB ({})",
-                    self.inner.lance_dir.display()
-                );
-            }
-        }
-
-        // Every add/delete creates a new file + version; compact on open so the
-        // directory does not grow without bound.
-        run_optimize(&table).await;
-
-        Ok(table)
-    }
-
-    /// Compact small files and prune old table versions (best-effort).
-    pub async fn optimize(&self) -> Result<()> {
-        let table = self.table().await?;
-        self.inner.writes_since_optimize.store(0, Ordering::Relaxed);
-        table
-            .optimize(OptimizeAction::All)
-            .await
-            .context("optimize memory table")?;
+            .ready
+            .get_or_try_init(|| async {
+                if let Err(err) = self.reembed_stale_rows().await {
+                    eprintln!("piya: memory re-embedding failed: {err:#}");
+                    *self.inner.stale.lock().unwrap() = Some(format!(
+                        "memory was indexed with another embeddings model and re-indexing failed: {err:#}"
+                    ));
+                }
+                Ok::<(), anyhow::Error>(())
+            })
+            .await?;
         Ok(())
     }
 
-    /// Compact after a batch of writes so long-running daemons stay small too.
-    async fn note_write(&self, table: &Table) {
-        let n = self.inner.writes_since_optimize.fetch_add(1, Ordering::Relaxed) + 1;
-        if n >= OPTIMIZE_EVERY_WRITES {
-            self.inner.writes_since_optimize.store(0, Ordering::Relaxed);
-            run_optimize(table).await;
+    async fn reembed_stale_rows(&self) -> Result<()> {
+        let Some(model) = self.inner.llm.embedding_id() else {
+            return Ok(());
+        };
+        let stale: Vec<(String, String)> = {
+            let conn = self.conn()?;
+            let mut stmt = conn.prepare(
+                "SELECT id, text FROM memories WHERE embedding IS NULL OR embedding_model != ?1",
+            )?;
+            let rows = stmt
+                .query_map(params![model], |r| Ok((r.get(0)?, r.get(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            rows
+        };
+        if stale.is_empty() {
+            return Ok(());
         }
+        eprintln!("piya: re-embedding {} memories with {model}…", stale.len());
+        for chunk in stale.chunks(64) {
+            let texts: Vec<String> = chunk.iter().map(|(_, t)| t.clone()).collect();
+            let vectors = self.inner.llm.embed(&texts).await?;
+            anyhow::ensure!(vectors.len() == texts.len(), "embeddings response size mismatch");
+            let conn = self.conn()?;
+            let tx = conn.unchecked_transaction()?;
+            for ((id, _), v) in chunk.iter().zip(vectors) {
+                tx.execute(
+                    "UPDATE memories SET embedding = ?1, embedding_model = ?2 WHERE id = ?3",
+                    params![db::embedding_to_blob(&v), model, id],
+                )?;
+            }
+            tx.commit()?;
+        }
+        eprintln!("piya: memory re-embedded with {model}");
+        Ok(())
     }
 
     async fn embed_one(&self, text: &str) -> Result<Vec<f32>> {
-        let embedding = self
-            .inner
+        self.ensure_ready().await?;
+        if let Some(err) = self.inner.stale.lock().unwrap().clone() {
+            anyhow::bail!("{err}");
+        }
+        self.inner
             .llm
             .embed(&[text.to_string()])
             .await?
             .into_iter()
             .next()
-            .context("empty embedding response")?;
-        anyhow::ensure!(
-            embedding.len() == self.inner.dim as usize,
-            "embedding dim {} != expected {}",
-            embedding.len(),
-            self.inner.dim
-        );
-        Ok(embedding)
+            .context("empty embedding response")
     }
 
     pub async fn remember(
@@ -286,14 +248,12 @@ impl VectorMemory {
         source: &str,
     ) -> Result<String> {
         let text = text.trim();
-        anyhow::ensure!(!text.is_empty(), "memory text cannot be empty");
+        anyhow::ensure!(!text.is_empty(), "memory text is empty");
 
         let embedding = self.embed_one(text).await?;
 
         // Skip near-duplicates; if the new note is richer, replace the short one.
-        if let Some((dup_id, dup_text, sim)) =
-            self.find_near_duplicate(text, embedding.clone()).await?
-        {
+        if let Some((dup_id, dup_text, sim)) = self.find_near_duplicate(text, embedding.clone()).await? {
             if sim >= 0.97 && normalize_memory_text(text) == normalize_memory_text(&dup_text) {
                 return Ok(dup_id);
             }
@@ -305,40 +265,29 @@ impl VectorMemory {
         }
 
         let id = Uuid::new_v4().to_string();
-        let table = self.table().await?;
-        let batch = memory_batch(
-            self.inner.dim,
-            &[MemoryRow {
-                id: id.clone(),
-                text: text.to_string(),
-                kind: kind.as_str().to_string(),
-                task_id: task_id.unwrap_or("").to_string(),
-                tags: serde_json::to_string(tags)?,
+        let model = self.inner.llm.embedding_id().unwrap_or_default();
+        self.conn()?.execute(
+            "INSERT INTO memories(id, text, kind, task_id, tags, accuracy, source, created_at,
+                                  recall_count, embedding, embedding_model)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0, ?9, ?10)",
+            params![
+                id,
+                text,
+                kind.as_str(),
+                task_id.unwrap_or(""),
+                serde_json::to_string(tags)?,
                 accuracy,
-                source: source.to_string(),
-                created_at: Utc::now().to_rfc3339(),
-                recall_count: 0,
-                vector: embedding,
-            }],
+                source,
+                Utc::now().to_rfc3339(),
+                db::embedding_to_blob(&embedding),
+                model
+            ],
         )?;
-        let schema = batch.schema();
-        let reader: Box<dyn RecordBatchReader + Send> =
-            Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema));
-        table
-            .add(reader)
-            .execute()
-            .await
-            .context("LanceDB add memory")?;
-        self.note_write(table).await;
         Ok(id)
     }
 
     /// Find a near-duplicate by embedding similarity. Returns (id, text, similarity).
-    async fn find_near_duplicate(
-        &self,
-        text: &str,
-        embedding: Vec<f32>,
-    ) -> Result<Option<(String, String, f64)>> {
+    async fn find_near_duplicate(&self, text: &str, embedding: Vec<f32>) -> Result<Option<(String, String, f64)>> {
         let opts = RecallOpts {
             limit: 3,
             min_score: 0.90,
@@ -355,8 +304,7 @@ impl VectorMemory {
 
     pub async fn recall(&self, query: &str, opts: RecallOpts) -> Result<Vec<MemoryHit>> {
         let query_embedding = self.embed_one(query).await?;
-        self.recall_with_embedding(query, query_embedding, opts)
-            .await
+        self.recall_with_embedding(query, query_embedding, opts).await
     }
 
     async fn recall_with_embedding(
@@ -365,83 +313,62 @@ impl VectorMemory {
         query_embedding: Vec<f32>,
         opts: RecallOpts,
     ) -> Result<Vec<MemoryHit>> {
-        let table = self.table().await?;
-        let mut filter = format!("accuracy >= {}", opts.min_accuracy);
+        let model = self.inner.llm.embedding_id().unwrap_or_default();
+        let conn = self.conn()?;
+        let mut sql = String::from(
+            "SELECT id, text, kind, accuracy, source, tags, embedding FROM memories
+             WHERE embedding IS NOT NULL AND embedding_model = ?1 AND accuracy >= ?2",
+        );
         if let Some(k) = opts.kind {
-            filter = format!("{filter} AND kind = '{}'", k.as_str());
+            sql.push_str(&format!(" AND kind = '{}'", k.as_str()));
         }
         if opts.exclude_outcomes {
-            filter = format!("{filter} AND kind != 'outcome'");
+            sql.push_str(" AND kind != 'outcome'");
         }
-
-        // Over-fetch so filters / dedup / score floor still yield `limit` good hits.
-        let fetch = opts.limit.saturating_mul(5).max(opts.limit).max(16);
-        let batches = table
-            .vector_search(query_embedding)
-            .context("vector_search")?
-            .distance_type(DistanceType::Cosine)
-            .only_if(filter)
-            .limit(fetch)
-            .execute()
-            .await
-            .context("execute vector search")?
-            .try_collect::<Vec<_>>()
-            .await
-            .context("collect vector search")?;
+        let mut stmt = conn.prepare(&sql)?;
+        let q_norm = norm(&query_embedding);
+        let rows = stmt.query_map(params![model, opts.min_accuracy], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, String>(2)?,
+                r.get::<_, f64>(3)?,
+                r.get::<_, String>(4)?,
+                r.get::<_, String>(5)?,
+                r.get::<_, Vec<u8>>(6)?,
+            ))
+        })?;
 
         let mut hits = Vec::new();
-        for batch in batches {
-            let ids = column_utf8(&batch, "id")?;
-            let texts = column_utf8(&batch, "text")?;
-            let kinds = column_utf8(&batch, "kind")?;
-            let accuracies = column_f64(&batch, "accuracy")?;
-            let sources = column_utf8(&batch, "source").unwrap_or_default();
-            let tags_col = column_utf8(&batch, "tags").unwrap_or_default();
-            let distances =
-                column_f32(&batch, "_distance").unwrap_or_else(|_| vec![0.0; batch.num_rows()]);
-
-            for i in 0..batch.num_rows() {
-                let distance = distances.get(i).copied().unwrap_or(0.0) as f64;
-                // Cosine distance ∈ [0, 2] → similarity ∈ [0, 1]
-                let similarity = (1.0 - distance / 2.0).clamp(0.0, 1.0);
-                let accuracy = accuracies.get(i).copied().unwrap_or(0.5);
-                let text = texts.get(i).cloned().unwrap_or_default();
-                let source = sources.get(i).cloned().unwrap_or_default();
-                let tags = tags_col.get(i).cloned().unwrap_or_default();
-                let kind =
-                    MemoryKind::parse(kinds.get(i).map(String::as_str).unwrap_or("learning"));
-
-                let mut score = similarity * (0.5 + accuracy * 0.5);
-                score += keyword_boost(query, &text);
-                score += fact_signal_boost(&text);
-                score += query_context_adjust(query, &text);
-                if opts.prefer_user && is_user_memory(&source, &tags) {
-                    score += 0.08;
-                }
-                // Prefer denser factual notes over one-line fragments.
-                if text.len() > 80 {
-                    score += 0.02;
-                }
-                if text.len() > 160 {
-                    score += 0.02;
-                }
-
-                hits.push(MemoryHit {
-                    id: ids.get(i).cloned().unwrap_or_default(),
-                    text,
-                    kind,
-                    score,
-                    accuracy,
-                    source,
-                });
+        for row in rows {
+            let (id, text, kind, accuracy, source, tags, blob) = row?;
+            let v = db::blob_to_embedding(&blob);
+            if v.len() != query_embedding.len() {
+                continue;
             }
+            let cos = cosine(&query_embedding, q_norm, &v);
+            // Same scale as the previous LanceDB ranking: cosine distance ∈ [0, 2] → [0, 1].
+            let similarity = ((1.0 + cos) / 2.0).clamp(0.0, 1.0);
+            let kind = MemoryKind::parse(&kind);
+
+            let mut score = similarity * (0.5 + accuracy * 0.5);
+            score += keyword_boost(query, &text);
+            score += fact_signal_boost(&text);
+            score += query_context_adjust(query, &text);
+            if opts.prefer_user && is_user_memory(&source, &tags) {
+                score += 0.08;
+            }
+            // Prefer denser factual notes over one-line fragments.
+            if text.len() > 80 {
+                score += 0.02;
+            }
+            if text.len() > 160 {
+                score += 0.02;
+            }
+            hits.push(MemoryHit { id, text, kind, score, accuracy, source });
         }
 
-        hits.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
 
         // Dedup near-identical texts (keep highest score).
         let mut deduped: Vec<MemoryHit> = Vec::new();
@@ -449,10 +376,9 @@ impl VectorMemory {
             if hit.score < opts.min_score {
                 continue;
             }
-            let norm = normalize_memory_text(&hit.text);
+            let norm_text = normalize_memory_text(&hit.text);
             if deduped.iter().any(|h| {
-                let other = normalize_memory_text(&h.text);
-                other == norm || texts_near_duplicate(&h.text, &hit.text)
+                normalize_memory_text(&h.text) == norm_text || texts_near_duplicate(&h.text, &hit.text)
             }) {
                 continue;
             }
@@ -461,65 +387,41 @@ impl VectorMemory {
                 break;
             }
         }
-
-        // Ranking never uses recall_count; skip per-hit LanceDB writes.
         Ok(deduped)
     }
 
     /// List recent memories for Settings (no embedding / vector search).
     pub async fn list_recent(&self, limit: usize) -> Result<Vec<MemoryEntry>> {
-        let table = self.table().await?;
-        let limit = limit.clamp(1, 500);
-        let batches = table
-            .query()
-            .select(lancedb::query::Select::columns(&[
-                "id",
-                "text",
-                "kind",
-                "tags",
-                "created_at",
-                "source",
-            ]))
-            .limit(limit)
-            .execute()
-            .await
-            .context("list memories")?
-            .try_collect::<Vec<_>>()
-            .await
-            .context("collect memories")?;
-
-        let mut entries = Vec::new();
-        for batch in batches {
-            let ids = column_utf8(&batch, "id")?;
-            let texts = column_utf8(&batch, "text")?;
-            let kinds = column_utf8(&batch, "kind")?;
-            let tags = column_utf8(&batch, "tags").unwrap_or_default();
-            let created = column_utf8(&batch, "created_at").unwrap_or_default();
-            let sources = column_utf8(&batch, "source").unwrap_or_default();
-            for i in 0..batch.num_rows() {
-                entries.push(MemoryEntry {
-                    id: ids.get(i).cloned().unwrap_or_default(),
-                    text: texts.get(i).cloned().unwrap_or_default(),
-                    kind: kinds.get(i).cloned().unwrap_or_default(),
-                    tags: tags.get(i).cloned().unwrap_or_default(),
-                    created_at: created.get(i).cloned().unwrap_or_default(),
-                    source: sources.get(i).cloned().unwrap_or_default(),
-                });
-            }
-        }
-        // Newest first when created_at is RFC3339-sortable.
-        entries.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-        entries.truncate(limit);
-        Ok(entries)
+        let _ = self.ensure_ready().await;
+        let conn = self.conn()?;
+        let mut stmt = conn.prepare(
+            "SELECT id, text, kind, tags, created_at, source FROM memories ORDER BY created_at DESC LIMIT ?1",
+        )?;
+        let rows = stmt
+            .query_map(params![limit.clamp(1, 500) as i64], |r| {
+                Ok(MemoryEntry {
+                    id: r.get(0)?,
+                    text: r.get(1)?,
+                    kind: r.get(2)?,
+                    tags: r.get(3)?,
+                    created_at: r.get(4)?,
+                    source: r.get(5)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
     }
 
     pub async fn delete_by_id(&self, id: &str) -> Result<()> {
-        let table = self.table().await?;
-        let predicate = format!("id = '{}'", sql_escape(id));
-        table
-            .delete(&predicate)
-            .await
+        self.conn()?
+            .execute("DELETE FROM memories WHERE id = ?1", params![id])
             .with_context(|| format!("delete memory {id}"))?;
+        Ok(())
+    }
+
+    /// Kept for the `piya optimize` command: compacts the database file.
+    pub async fn optimize(&self) -> Result<()> {
+        self.conn()?.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
         Ok(())
     }
 
@@ -544,20 +446,19 @@ impl VectorMemory {
     }
 
     pub fn stats(&self) -> Result<usize> {
-        let dir = self.inner.lance_dir.clone();
-        crate::runtime::block_on(async move {
-            let uri = dir
-                .to_str()
-                .ok_or_else(|| anyhow!("memory.lance path is not valid UTF-8"))?;
-            let db = connect(uri).execute().await.context("connect LanceDB")?;
-            let names = db.table_names().execute().await?;
-            if !names.iter().any(|n| n == TABLE_NAME) {
-                return Ok(0);
-            }
-            let table = db.open_table(TABLE_NAME).execute().await?;
-            Ok(table.count_rows(None).await?)
-        })
+        let n: i64 = self.conn()?.query_row("SELECT count(*) FROM memories", [], |r| r.get(0))?;
+        Ok(n as usize)
     }
+}
+
+fn norm(v: &[f32]) -> f64 {
+    v.iter().map(|x| (*x as f64) * (*x as f64)).sum::<f64>().sqrt()
+}
+
+fn cosine(a: &[f32], a_norm: f64, b: &[f32]) -> f64 {
+    let dot: f64 = a.iter().zip(b).map(|(x, y)| (*x as f64) * (*y as f64)).sum();
+    let denom = a_norm * norm(b);
+    if denom == 0.0 { 0.0 } else { dot / denom }
 }
 
 #[derive(Clone, Debug)]
@@ -568,183 +469,6 @@ pub struct MemoryEntry {
     pub tags: String,
     pub created_at: String,
     pub source: String,
-}
-
-struct MemoryRow {
-    id: String,
-    text: String,
-    kind: String,
-    task_id: String,
-    tags: String,
-    accuracy: f64,
-    source: String,
-    created_at: String,
-    recall_count: i64,
-    vector: Vec<f32>,
-}
-
-/// Compact + prune after this many writes in one process.
-const OPTIMIZE_EVERY_WRITES: usize = 50;
-
-async fn run_optimize(table: &Table) {
-    if let Err(err) = table.optimize(OptimizeAction::All).await {
-        // Another Piya process may be committing concurrently; try again later.
-        eprintln!("piya: memory optimize skipped: {err}");
-    }
-}
-
-fn memories_schema(dim: i32) -> Arc<Schema> {
-    Arc::new(Schema::new(vec![
-        Field::new("id", DataType::Utf8, false),
-        Field::new("text", DataType::Utf8, false),
-        Field::new("kind", DataType::Utf8, false),
-        Field::new("task_id", DataType::Utf8, false),
-        Field::new("tags", DataType::Utf8, false),
-        Field::new("accuracy", DataType::Float64, false),
-        Field::new("source", DataType::Utf8, false),
-        Field::new("created_at", DataType::Utf8, false),
-        Field::new("recall_count", DataType::Int64, false),
-        Field::new(
-            "vector",
-            DataType::FixedSizeList(Arc::new(Field::new("item", DataType::Float32, true)), dim),
-            false,
-        ),
-    ]))
-}
-
-fn memory_batch(dim: i32, rows: &[MemoryRow]) -> Result<RecordBatch> {
-    let schema = memories_schema(dim);
-    let n = rows.len();
-    let mut flat = Vec::with_capacity(n * dim as usize);
-    for row in rows {
-        anyhow::ensure!(
-            row.vector.len() == dim as usize,
-            "row {} has dim {}, expected {dim}",
-            row.id,
-            row.vector.len()
-        );
-        flat.extend_from_slice(&row.vector);
-    }
-    let values = Float32Array::from(flat);
-    let vector = FixedSizeListArray::new(
-        Arc::new(Field::new("item", DataType::Float32, true)),
-        dim,
-        Arc::new(values),
-        None,
-    );
-
-    Ok(RecordBatch::try_new(
-        schema,
-        vec![
-            Arc::new(StringArray::from(
-                rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(),
-            )) as ArrayRef,
-            Arc::new(StringArray::from(
-                rows.iter().map(|r| r.text.as_str()).collect::<Vec<_>>(),
-            )) as ArrayRef,
-            Arc::new(StringArray::from(
-                rows.iter().map(|r| r.kind.as_str()).collect::<Vec<_>>(),
-            )) as ArrayRef,
-            Arc::new(StringArray::from(
-                rows.iter().map(|r| r.task_id.as_str()).collect::<Vec<_>>(),
-            )) as ArrayRef,
-            Arc::new(StringArray::from(
-                rows.iter().map(|r| r.tags.as_str()).collect::<Vec<_>>(),
-            )) as ArrayRef,
-            Arc::new(Float64Array::from(
-                rows.iter().map(|r| r.accuracy).collect::<Vec<_>>(),
-            )) as ArrayRef,
-            Arc::new(StringArray::from(
-                rows.iter().map(|r| r.source.as_str()).collect::<Vec<_>>(),
-            )) as ArrayRef,
-            Arc::new(StringArray::from(
-                rows.iter().map(|r| r.created_at.as_str()).collect::<Vec<_>>(),
-            )) as ArrayRef,
-            Arc::new(Int64Array::from(
-                rows.iter().map(|r| r.recall_count).collect::<Vec<_>>(),
-            )) as ArrayRef,
-            Arc::new(vector) as ArrayRef,
-        ],
-    )?)
-}
-
-async fn migrate_sqlite_into(table: &Table, sqlite_path: &Path, expected_dim: i32) -> Result<usize> {
-    // Load SQLite fully first — rusqlite types are !Send and must not cross awaits.
-    let migrated = load_legacy_rows(sqlite_path, expected_dim)?;
-    if migrated.is_empty() {
-        return Ok(0);
-    }
-
-    let mut total = 0;
-    for chunk in migrated.chunks(64) {
-        let batch = memory_batch(expected_dim, chunk)?;
-        let schema = batch.schema();
-        let reader: Box<dyn RecordBatchReader + Send> =
-            Box::new(RecordBatchIterator::new(vec![Ok(batch)], schema));
-        table.add(reader).execute().await.context("migrate add")?;
-        total += chunk.len();
-    }
-    Ok(total)
-}
-
-fn load_legacy_rows(sqlite_path: &Path, expected_dim: i32) -> Result<Vec<MemoryRow>> {
-    let conn = Connection::open(sqlite_path).context("open legacy memory.db")?;
-    let mut stmt = conn.prepare(
-        "SELECT id, text, kind, task_id, tags, accuracy, source, created_at, recall_count, embedding FROM memories",
-    )?;
-    let rows = stmt.query_map([], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, String>(3)?,
-            row.get::<_, String>(4)?,
-            row.get::<_, f64>(5)?,
-            row.get::<_, String>(6)?,
-            row.get::<_, String>(7)?,
-            row.get::<_, i64>(8)?,
-            row.get::<_, Vec<u8>>(9)?,
-        ))
-    })?;
-
-    let mut migrated = Vec::new();
-    for row in rows {
-        let (id, text, kind, task_id, tags, accuracy, source, created_at, recall_count, blob) =
-            row?;
-        let vector = blob_to_embedding(&blob)?;
-        if vector.len() != expected_dim as usize {
-            eprintln!(
-                "piya: skip memory {id}: embedding dim {} != {expected_dim}",
-                vector.len()
-            );
-            continue;
-        }
-        migrated.push(MemoryRow {
-            id,
-            text,
-            kind,
-            task_id,
-            tags,
-            accuracy,
-            source,
-            created_at,
-            recall_count,
-            vector,
-        });
-    }
-    Ok(migrated)
-}
-
-fn blob_to_embedding(blob: &[u8]) -> Result<Vec<f32>> {
-    anyhow::ensure!(blob.len() % 4 == 0, "invalid embedding blob length");
-    Ok(blob
-        .chunks_exact(4)
-        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-        .collect())
-}
-
-fn sql_escape(s: &str) -> String {
-    s.replace('\'', "''")
 }
 
 fn is_user_memory(source: &str, tags_json: &str) -> bool {
@@ -908,47 +632,3 @@ mod tests {
     }
 }
 
-fn column_utf8(batch: &RecordBatch, name: &str) -> Result<Vec<String>> {
-    let col = batch
-        .column_by_name(name)
-        .with_context(|| format!("missing column {name}"))?;
-    let arr = col
-        .as_any()
-        .downcast_ref::<StringArray>()
-        .with_context(|| format!("column {name} is not Utf8"))?;
-    Ok((0..arr.len())
-        .map(|i| {
-            if arr.is_null(i) {
-                String::new()
-            } else {
-                arr.value(i).to_string()
-            }
-        })
-        .collect())
-}
-
-fn column_f64(batch: &RecordBatch, name: &str) -> Result<Vec<f64>> {
-    let col = batch
-        .column_by_name(name)
-        .with_context(|| format!("missing column {name}"))?;
-    let arr = col
-        .as_any()
-        .downcast_ref::<Float64Array>()
-        .with_context(|| format!("column {name} is not Float64"))?;
-    Ok((0..arr.len())
-        .map(|i| if arr.is_null(i) { 0.5 } else { arr.value(i) })
-        .collect())
-}
-
-fn column_f32(batch: &RecordBatch, name: &str) -> Result<Vec<f32>> {
-    let col = batch
-        .column_by_name(name)
-        .with_context(|| format!("missing column {name}"))?;
-    let arr = col
-        .as_any()
-        .downcast_ref::<Float32Array>()
-        .with_context(|| format!("column {name} is not Float32"))?;
-    Ok((0..arr.len())
-        .map(|i| if arr.is_null(i) { 0.0 } else { arr.value(i) })
-        .collect())
-}

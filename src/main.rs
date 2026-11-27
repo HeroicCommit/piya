@@ -12,7 +12,7 @@ use piya::tasks::TaskStatus;
 use piya::ui;
 
 #[derive(Parser)]
-#[command(name = "piya", about = "Continuous AI agent with vector memory and OPPAR loop")]
+#[command(name = "piya", version, about = "Continuous AI agent with vector memory and OPPAR loop")]
 struct Cli {
     /// Emit JSON (for MCP / OpenClaw integrations)
     #[arg(long, global = true)]
@@ -37,6 +37,12 @@ enum Commands {
         /// Install Piya.app to /Applications + login item
         #[arg(long)]
         install: bool,
+        /// Atomically update /Applications/Piya.app in place from local build (keeps config & login item)
+        #[arg(long)]
+        update: bool,
+        /// Proceed even if background tasks are currently running
+        #[arg(long)]
+        force: bool,
         /// Remove Piya.app and login item
         #[arg(long)]
         uninstall: bool,
@@ -92,6 +98,53 @@ enum Commands {
     Status,
     /// Compact vector memory files and prune old versions
     Optimize,
+    /// Check for or install Piya updates in place (without reinstalling)
+    Update {
+        /// Only check if a newer release is available on GitHub
+        #[arg(long)]
+        check: bool,
+        /// Update /Applications/Piya.app from the local staged build instead of GitHub Releases
+        #[arg(long)]
+        local: bool,
+        /// Proceed even if up-to-date or if background tasks are running
+        #[arg(long)]
+        force: bool,
+    },
+    /// Move legacy data (JSON chats, LanceDB memory) into piya.db and report counts
+    Migrate,
+    /// Run repair + daily reflection over recent user conversations
+    Reflect {
+        /// Run even if reflection already ran today
+        #[arg(long)]
+        force: bool,
+    },
+    /// Inspect or search recorded desktop activity (apps, windows, screen text)
+    Activity {
+        /// Optional search query across windows, URLs, and screen text
+        #[arg(long, short = 's')]
+        search: Option<String>,
+        /// Period (`today`, `yesterday`, `this_week`, `last_30_days`)
+        #[arg(long, short = 'p', default_value = "today")]
+        period: String,
+        /// Clear recorded activity (`--clear` clears all; combine with `--today` for today only)
+        #[arg(long)]
+        clear: bool,
+    },
+    /// Run basic-errand evals against the real model (throwaway data dir; asserts on state)
+    Eval {
+        /// Only run cases whose name contains this text
+        #[arg(long, short = 'f')]
+        filter: Option<String>,
+        /// Run each case N times
+        #[arg(long, short = 'n', default_value_t = 1)]
+        repeat: usize,
+    },
+    /// Cancel legacy keyword-routed reminder tasks and purge agent memories that taught them
+    Cleanup {
+        /// Show what would change without changing anything
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Search vector memory
     Recall {
         query: String,
@@ -136,7 +189,8 @@ fn is_sync_command(cli: &Cli) -> bool {
         #[cfg(target_os = "macos")]
         Some(Commands::Mcp) => true,
         Some(Commands::Watch) => true,
-        Some(Commands::App { .. }) | Some(Commands::Badge { .. }) => true,
+        Some(Commands::App { .. }) | Some(Commands::Badge { .. }) | Some(Commands::Update { .. }) => true,
+        Some(Commands::Eval { .. }) => true,
         None => {
             #[cfg(target_os = "macos")]
             {
@@ -170,14 +224,72 @@ fn run_sync(cli: &Cli, settings: Settings) -> Result<()> {
             "Legacy wry MCP settings are disabled. Rebuild with `--features legacy-ui` or use PiyaSwift.app."
         ),
         Some(Commands::Watch) => ui::watch::run(settings),
-        Some(Commands::App { install, uninstall }) => {
+        Some(Commands::Eval { ref filter, repeat }) => {
+            let failures = piya::evals::run(&settings, filter.as_deref(), repeat)?;
+            if failures > 0 {
+                std::process::exit(1);
+            }
+            Ok(())
+        }
+        Some(Commands::App {
+            install,
+            update,
+            force,
+            uninstall,
+        }) => {
             if uninstall {
                 ui::app::uninstall(&settings)
+            } else if update {
+                ui::app::update_from_local(&settings, force)
             } else if install {
                 ui::app::install(&settings)
             } else {
                 ui::badge::run(settings)
             }
+        }
+        Some(Commands::Update {
+            check,
+            local,
+            force,
+        }) => {
+            if local {
+                return ui::app::update_from_local(&settings, force);
+            }
+            let info = piya::updater::check_for_update()?;
+            if check {
+                if cli.json {
+                    print_json(&info)?;
+                } else if info.update_available {
+                    println!(
+                        "Update available: {} -> {} ({})",
+                        info.current_version, info.latest_version, info.release_url
+                    );
+                } else {
+                    println!("Piya is up to date ({}).", info.current_version);
+                }
+                return Ok(());
+            }
+            if !info.update_available && !force {
+                if cli.json {
+                    print_json(&info)?;
+                } else {
+                    println!("Piya is already up to date ({}).", info.current_version);
+                }
+                return Ok(());
+            }
+            println!(
+                "Downloading Piya v{} and verifying integrity…",
+                info.latest_version
+            );
+            let dest = std::path::PathBuf::from(piya::updater::INSTALLED_APP_PATH);
+            let staged = piya::updater::download_and_stage_release(&info, &dest)?;
+            piya::updater::apply_staged_update_cli(&settings, &staged, &dest, force)?;
+            println!(
+                "Updated {} to v{} (config, data, and login item untouched).",
+                dest.display(),
+                info.latest_version
+            );
+            Ok(())
         }
         Some(Commands::Badge { install, uninstall }) => {
             if uninstall {
@@ -271,14 +383,13 @@ async fn run_async(cli: Cli, settings: Settings) -> Result<()> {
             priority,
             tags,
         }) => {
-            let agent = AgentLoop::new(settings, false)?;
-            let title: String = brief.chars().take(80).collect();
-            let tags = merge_tags(&tags, &title, &brief);
-            let task = agent.tasks().add(&title, &brief, priority, &tags)?;
+            // Natural-language brief: let the model route it (reminder, action, task, answer).
+            let _ = (priority, tags);
+            let outcome = piya::ui::assign::converse_task(&settings, &[], &brief);
             if cli.json {
-                print_json(&task)?;
+                print_json(&serde_json::json!({ "reply": outcome.reply }))?;
             } else {
-                println!("Assigned task {}… — {}", &task.id[..8], task.title);
+                println!("{}", outcome.reply);
             }
             Ok(())
         }
@@ -335,6 +446,75 @@ async fn run_async(cli: Cli, settings: Settings) -> Result<()> {
             } else {
                 agent.show_status()?;
             }
+            Ok(())
+        }
+        Some(Commands::Cleanup { dry_run }) => {
+            let report = piya::cleanup::run(&settings, dry_run).await?;
+            let verb = if dry_run { "Would cancel" } else { "Cancelled" };
+            println!("{verb} {} legacy task(s):", report.cancelled.len());
+            for t in &report.cancelled {
+                println!("  - {t}");
+            }
+            let verb = if dry_run { "Would delete" } else { "Deleted" };
+            println!("{verb} {} misleading agent memory(ies):", report.memories_deleted.len());
+            for m in &report.memories_deleted {
+                println!("  - {m}");
+            }
+            Ok(())
+        }
+        Some(Commands::Migrate) => {
+            let store = piya::chat_session::ChatSessionStore::open(&settings.data_dir)?;
+            let chats = store.list().len();
+            drop(store);
+            let llm = piya::llm::LlmClient::new(&settings)?;
+            let memory = piya::memory::VectorMemory::new(&settings.data_dir, llm)?;
+            let _ = memory.list_recent(1).await?;
+            let conn = piya::db::open(&settings.data_dir)?;
+            let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap_or(-1) };
+            println!("piya.db: {}", piya::db::path(&settings.data_dir).display());
+            println!("  chats:        {chats} ({} messages)", count("SELECT count(*) FROM chat_messages"));
+            println!("  memories:     {} ({} with embeddings)",
+                count("SELECT count(*) FROM memories"),
+                count("SELECT count(*) FROM memories WHERE embedding IS NOT NULL"));
+            println!("  tasks:        {}", count("SELECT count(*) FROM tasks"));
+            println!("  notes:        {}", count("SELECT count(*) FROM notes WHERE status != 'archived'"));
+            println!("  skills:       {}", count("SELECT count(*) FROM learned_skills"));
+            Ok(())
+        }
+        Some(Commands::Reflect { force }) => {
+            let r = piya::reflect::reflect_if_due(&settings, force).await?;
+            println!(
+                "Reflection {} — scanned {} msg(s), saved {} note(s), promoted {}, replaced {}, expired {}, merged {} duplicate(s).",
+                if r.ran_reflection { "ran" } else { "up to date" },
+                r.messages_scanned,
+                r.notes_saved,
+                r.notes_promoted,
+                r.notes_replaced,
+                r.expired_archived,
+                r.duplicates_merged
+            );
+            Ok(())
+        }
+        Some(Commands::Activity {
+            search,
+            period,
+            clear,
+        }) => {
+            let conn = piya::db::open(&settings.data_dir)?;
+            if clear {
+                let n = piya::activity::clear_activity(&conn, period == "today")?;
+                println!("Cleared {n} activity event(s).");
+                return Ok(());
+            }
+            let out = piya::activity::query_for_tool(
+                &conn,
+                search.as_deref(),
+                Some(&period),
+                None,
+                None,
+                40,
+            )?;
+            println!("{out}");
             Ok(())
         }
         Some(Commands::Optimize) => {

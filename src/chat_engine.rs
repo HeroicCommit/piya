@@ -31,10 +31,14 @@ static MCP: Mutex<Option<CachedMcp>> = Mutex::new(None);
 
 fn llm_fingerprint(settings: &Settings) -> String {
     format!(
-        "{}|{}|{}|{}|{}",
-        settings.openai_api_key,
-        settings.openai_base_url,
+        "{}|{}|{}|{}|{}|{}|{}|{}|{}",
+        settings.provider,
+        settings.api_key,
+        settings.base_url,
         settings.model,
+        settings.embed_provider,
+        settings.embed_api_key,
+        settings.embed_base_url,
         settings.embedding_model,
         settings.data_dir.display()
     )

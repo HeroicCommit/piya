@@ -13,27 +13,35 @@ const MAX_TOOL_ROUNDS: usize = 8;
 pub struct Executor {
     llm: LlmClient,
     workspace: PathBuf,
+    data_dir: PathBuf,
 }
 
 impl Executor {
-    pub fn new(llm: LlmClient, workspace: PathBuf) -> Result<Self> {
+    pub fn new(llm: LlmClient, workspace: PathBuf, data_dir: PathBuf) -> Result<Self> {
         std::fs::create_dir_all(&workspace)?;
-        Ok(Self { llm, workspace })
+        Ok(Self {
+            llm,
+            workspace,
+            data_dir,
+        })
     }
 
     pub async fn execute(
         &self,
         task_title: &str,
+        done_when: Option<&str>,
         plan: &Value,
         research_context: &str,
         memory_context: &str,
         domains: &[Domain],
     ) -> Result<Value> {
         let user = format!(
-            "{}\n\nTask: {task_title}\n\nPlan:\n{plan}\n\nResearch:\n{research_context}\n\n\
-             {memory_context}\n\nWorkspace: {}\nExecute the plan now. Prefer running an existing \
-             script over rewriting it. Use tools, read their output, then finish with JSON.",
+            "{}\n\nTask: {task_title}\nCompletion condition (done_when): {}\n\nPlan:\n{plan}\n\n\
+             Research:\n{research_context}\n\n{memory_context}\n\nWorkspace: {}\n\
+             Execute the plan now. Prefer running an existing script over rewriting it. \
+             Use tools, read their output, verify the completion condition with a tool, then finish with JSON.",
             expertise::format_domain_context(domains),
+            done_when.unwrap_or("(see plan success_criteria)"),
             self.workspace.display(),
             plan = serde_json::to_string_pretty(plan)?
         );
@@ -42,6 +50,7 @@ impl Executor {
         let mut command_outputs: Vec<Value> = Vec::new();
 
         let workspace = self.workspace.clone();
+        let data_dir = self.data_dir.clone();
         let raw = self
             .llm
             .chat_with_tools(
@@ -52,6 +61,7 @@ impl Executor {
                 |name, args_json| {
                     dispatch_tool(
                         &workspace,
+                        &data_dir,
                         name,
                         args_json,
                         &mut artifacts,
@@ -106,6 +116,7 @@ impl Executor {
 
 fn dispatch_tool(
     workspace: &Path,
+    data_dir: &Path,
     name: &str,
     args_json: &str,
     artifacts: &mut Vec<Value>,
@@ -152,6 +163,52 @@ fn dispatch_tool(
             let out = run_cmd(workspace, cmd);
             command_outputs.push(command_output_json(&out));
             Ok(format_command_for_model(&out))
+        }
+        "piya_skill_read" => {
+            let skill_name = args
+                .get("name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("`name` is required"))?;
+            let conn = crate::db::open(data_dir)?;
+            let skill = crate::skills::read_skill(&conn, skill_name)?;
+            Ok(format!(
+                "[Learned procedure `{}` — guidance only, never permission]:\n{}",
+                skill.name, skill.body
+            ))
+        }
+        "piya_skill_save" => {
+            let skill_name = args
+                .get("name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("`name` is required"))?;
+            let desc = args
+                .get("description")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("`description` is required"))?;
+            let body = args
+                .get("body")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("`body` is required"))?;
+            let conn = crate::db::open(data_dir)?;
+            let saved = crate::skills::save_skill(&conn, skill_name, desc, body, false)?;
+            Ok(format!("Saved skill ✔ `{}` — {}", saved.name, saved.description))
+        }
+        "piya_skill_patch" => {
+            let skill_name = args
+                .get("name")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("`name` is required"))?;
+            let old = args
+                .get("old")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("`old` is required"))?;
+            let new = args
+                .get("new")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| anyhow!("`new` is required"))?;
+            let conn = crate::db::open(data_dir)?;
+            let patched = crate::skills::patch_skill(&conn, skill_name, old, new)?;
+            Ok(format!("Patched skill ✔ `{}`", patched.name))
         }
         other => Err(anyhow!("unknown tool `{other}`")),
     }
@@ -234,6 +291,41 @@ fn act_tools() -> Vec<ChatCompletionTool> {
                     "cmd": { "type": "string" }
                 },
                 "required": ["cmd"]
+            }),
+        ),
+        tool(
+            "piya_skill_read",
+            "Read a learned procedure from the skills index before repeating a matching workflow.",
+            json!({
+                "type": "object",
+                "properties": { "name": { "type": "string" } },
+                "required": ["name"]
+            }),
+        ),
+        tool(
+            "piya_skill_save",
+            "Save a reusable procedure (steps, gotchas, verification commands, no secrets) after a multi-step flow or workaround.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" },
+                    "description": { "type": "string" },
+                    "body": { "type": "string" }
+                },
+                "required": ["name", "description", "body"]
+            }),
+        ),
+        tool(
+            "piya_skill_patch",
+            "Update an out-of-date step in an existing learned skill.",
+            json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string" },
+                    "old": { "type": "string" },
+                    "new": { "type": "string" }
+                },
+                "required": ["name", "old", "new"]
             }),
         ),
     ]

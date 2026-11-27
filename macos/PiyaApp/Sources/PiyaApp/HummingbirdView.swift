@@ -1,8 +1,10 @@
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct HummingbirdView: View {
     @ObservedObject var model: ChatViewModel
+    @State private var isDropTargeted = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -174,11 +176,56 @@ struct HummingbirdView: View {
             messageList
             Divider()
             composer
-            Text("Enter to send · ⌘↩ or Shift+↩ for new line")
+            Text("Enter to send · ⌘V or drop files · 🎤 or hold ⌃⇧Space to talk")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 8)
         }
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 2, dash: [6, 4]))
+                    .background(Color.accentColor.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .padding(6)
+                    .allowsHitTesting(false)
+            }
+        }
+        .onDrop(of: [.fileURL, .png, .image], isTargeted: $isDropTargeted, perform: handleDrop)
+    }
+
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        var accepted = false
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                accepted = true
+                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                    let url: URL? = {
+                        if let data = item as? Data {
+                            return URL(dataRepresentation: data, relativeTo: nil)
+                        }
+                        return item as? URL
+                    }()
+                    if let url {
+                        Task { @MainActor in
+                            model.attachFileURLs([url])
+                        }
+                    }
+                }
+            } else if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
+                accepted = true
+                provider.loadDataRepresentation(forTypeIdentifier: UTType.png.identifier) { data, _ in
+                    guard let data, !data.isEmpty else { return }
+                    let tempURL = URL(fileURLWithPath: NSTemporaryDirectory())
+                        .appendingPathComponent("Dropped-\(UUID().uuidString.prefix(8)).png")
+                    if (try? data.write(to: tempURL, options: .atomic)) != nil {
+                        Task { @MainActor in
+                            model.attachFileURLs([tempURL], displayNameOverride: "Dropped image.png")
+                        }
+                    }
+                }
+            }
+        }
+        return accepted
     }
 
     private var messageList: some View {
@@ -230,40 +277,159 @@ struct HummingbirdView: View {
     }
 
     private var composer: some View {
-        HStack(alignment: .bottom, spacing: 8) {
-            if model.largePaste != nil {
-                largePasteComposer
-            } else {
-                ComposerTextView(
-                    text: $model.input,
-                    onSubmit: {
-                        if model.hasOutgoingText, !model.isSending {
-                            model.send()
+        VStack(alignment: .leading, spacing: 8) {
+            if let err = model.errorMessage, !err.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                    Text(err)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                    Spacer(minLength: 4)
+                    Button {
+                        model.errorMessage = nil
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
+                .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+
+            if !model.pendingAttachments.isEmpty || model.isStagingAttachment {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        ForEach(model.pendingAttachments) { att in
+                            pendingAttachmentChip(att)
                         }
-                    },
-                    onLargePaste: { model.attachPasteFromClipboard() }
-                )
-                .frame(height: 36)
-                .onChange(of: model.input) { _, _ in
-                    model.absorbLargeInputIfNeeded()
+                        if model.isStagingAttachment {
+                            HStack(spacing: 6) {
+                                ProgressView().controlSize(.small)
+                                Text("Preparing…")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        }
+                    }
                 }
             }
-            Button(action: {
-                if model.isSending {
-                    model.stop()
+
+            if model.isRecordingVoice {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(Color.red)
+                        .frame(width: 7, height: 7)
+                    Text("Listening on-device… edit text anytime or press Enter to send")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.leading, 4)
+            }
+
+            HStack(alignment: .bottom, spacing: 8) {
+                Button(action: { model.openAttachmentPicker() }) {
+                    Image(systemName: "paperclip")
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 26, height: 28)
+                }
+                .buttonStyle(.plain)
+                .disabled(model.isSending)
+                .help("Attach image, PDF, document, or audio file")
+
+                if model.largePaste != nil {
+                    largePasteComposer
                 } else {
-                    model.send()
+                    ComposerTextView(
+                        text: $model.input,
+                        onSubmit: {
+                            if model.hasOutgoingContent, !model.isSending, !model.isStagingAttachment {
+                                model.send()
+                            }
+                        },
+                        onLargePaste: { model.attachPasteFromClipboard() },
+                        onPasteAttachment: { model.pasteAttachmentFromClipboard() }
+                    )
+                    .frame(height: 32)
+                    .onChange(of: model.input) { _, _ in
+                        model.absorbLargeInputIfNeeded()
+                    }
                 }
-            }) {
-                Image(systemName: model.isSending ? "stop.circle.fill" : "arrow.up.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(model.isSending ? Color.primary.opacity(0.85) : Color.accentColor)
+
+                Button(action: { model.toggleVoiceDictation() }) {
+                    Image(systemName: model.isRecordingVoice ? "waveform.circle.fill" : "mic.fill")
+                        .font(model.isRecordingVoice ? .title2 : .body.weight(.semibold))
+                        .foregroundStyle(model.isRecordingVoice ? Color.red : Color.secondary)
+                        .frame(width: 26, height: 28)
+                }
+                .buttonStyle(.plain)
+                .disabled(model.isSending)
+                .help(model.isRecordingVoice ? "Stop dictation" : "Dictate with Apple on-device speech (or hold ⌃⇧Space)")
+
+                Button(action: {
+                    if model.isSending {
+                        model.stop()
+                    } else {
+                        model.send()
+                    }
+                }) {
+                    Image(systemName: model.isSending ? "stop.circle.fill" : "arrow.up.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(model.isSending ? Color.primary.opacity(0.85) : Color.accentColor)
+                }
+                .buttonStyle(.plain)
+                .disabled(!model.isSending && (!model.hasOutgoingContent || model.isStagingAttachment))
+                .help(model.isSending ? "Stop" : "Send")
             }
-            .buttonStyle(.plain)
-            .disabled(!model.isSending && !model.hasOutgoingText)
-            .help(model.isSending ? "Stop" : "Send")
         }
         .padding(12)
+    }
+
+    @ViewBuilder
+    private func pendingAttachmentChip(_ att: AttachmentItem) -> some View {
+        HStack(spacing: 7) {
+            if att.isImage, let nsImg = NSImage(contentsOfFile: att.resolvedPath) {
+                Image(nsImage: nsImg)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 32, height: 32)
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+            } else {
+                Image(systemName: att.symbolName)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+                    .frame(width: 24, height: 24)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text(att.name)
+                    .font(.caption.weight(.medium))
+                    .lineLimit(1)
+                Text(att.badgeLabel)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            Button {
+                model.removePendingAttachment(att.id)
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help("Remove attachment")
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
     }
 
     private var largePasteComposer: some View {
@@ -308,7 +474,11 @@ private struct MessageRow: View {
         let isUser = msg.role == "user"
         HStack(alignment: .top, spacing: 6) {
             if isUser { Spacer(minLength: 48) }
-            MessageBubbleContent(text: msg.text, isUser: isUser)
+            MessageBubbleContent(
+                text: msg.text,
+                attachments: msg.attachments,
+                isUser: isUser
+            )
                 .overlay(alignment: isUser ? .topLeading : .topTrailing) {
                     if hovering || copied {
                         copyButton

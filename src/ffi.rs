@@ -7,7 +7,6 @@ use crate::chat_session::{ChatSession, SessionMessage};
 use crate::config::{self, Settings};
 use crate::mcp_config::{McpConfig, McpServerEntry};
 use crate::tasks::{TaskQueue, TaskStatus};
-use crate::ui::assign::{converse_task, spawn_if_needed};
 
 #[derive(uniffi::Enum, Clone, Debug)]
 pub enum FfiChatMode {
@@ -47,9 +46,49 @@ fn load_settings() -> Result<Settings, PiyaError> {
 }
 
 #[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiAttachment {
+    pub id: String,
+    pub name: String,
+    pub path: String,
+    pub resolved_path: String,
+    pub mime: String,
+    pub kind: String,
+    pub text: String,
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
 pub struct FfiChatTurn {
     pub role: String,
     pub text: String,
+    pub attachments: Vec<FfiAttachment>,
+}
+
+fn att_to_ffi(a: crate::attachments::ChatAttachment, data_dir: &std::path::Path) -> FfiAttachment {
+    let resolved_path = a.resolve_path(data_dir).display().to_string();
+    FfiAttachment {
+        id: a.id,
+        name: a.name,
+        path: a.path,
+        resolved_path,
+        mime: a.mime,
+        kind: a.kind,
+        text: a.text.unwrap_or_default(),
+    }
+}
+
+fn ffi_to_att(a: FfiAttachment) -> crate::attachments::ChatAttachment {
+    crate::attachments::ChatAttachment {
+        id: a.id,
+        name: a.name,
+        path: a.path,
+        mime: a.mime,
+        kind: a.kind,
+        text: if a.text.trim().is_empty() {
+            None
+        } else {
+            Some(a.text)
+        },
+    }
 }
 
 #[derive(uniffi::Record, Clone, Debug)]
@@ -113,7 +152,7 @@ fn meta_to_ffi(m: crate::chat_session::SessionMeta) -> FfiChatSessionMeta {
     }
 }
 
-fn session_to_ffi(session: ChatSession) -> FfiChatSession {
+fn session_to_ffi(session: ChatSession, data_dir: &std::path::Path) -> FfiChatSession {
     FfiChatSession {
         mode: session.mode,
         messages: session
@@ -122,6 +161,11 @@ fn session_to_ffi(session: ChatSession) -> FfiChatSession {
             .map(|m| FfiChatTurn {
                 role: m.role,
                 text: m.text,
+                attachments: m
+                    .attachments
+                    .into_iter()
+                    .map(|a| att_to_ffi(a, data_dir))
+                    .collect(),
             })
             .collect(),
     }
@@ -135,6 +179,7 @@ fn turns_to_session(mode: String, messages: Vec<FfiChatTurn>) -> ChatSession {
             .map(|m| SessionMessage {
                 role: m.role,
                 text: m.text,
+                attachments: m.attachments.into_iter().map(ffi_to_att).collect(),
             })
             .collect(),
     }
@@ -212,7 +257,7 @@ pub fn piya_load_chat_session() -> Result<FfiChatSession, PiyaError> {
     let session = store.load_active().map_err(|err| PiyaError::Chat {
         message: err.to_string(),
     })?;
-    Ok(session_to_ffi(session))
+    Ok(session_to_ffi(session, &settings.data_dir))
 }
 
 #[uniffi::export]
@@ -230,6 +275,27 @@ pub fn piya_save_chat_session(mode: String, messages: Vec<FfiChatTurn>) -> Resul
 }
 
 #[uniffi::export]
+pub fn piya_stage_attachment(
+    session_id: String,
+    source_path: String,
+    display_name: String,
+    extracted_text: String,
+) -> Result<FfiAttachment, PiyaError> {
+    let settings = load_settings()?;
+    let att = crate::attachments::stage_attachment(
+        &settings,
+        &session_id,
+        std::path::Path::new(&source_path),
+        (!display_name.trim().is_empty()).then_some(display_name.as_str()),
+        (!extracted_text.trim().is_empty()).then_some(extracted_text.as_str()),
+    )
+    .map_err(|err| PiyaError::Chat {
+        message: format!("{err:#}"),
+    })?;
+    Ok(att_to_ffi(att, &settings.data_dir))
+}
+
+#[uniffi::export]
 pub fn piya_chat(message: String, history: Vec<FfiChatTurn>) -> Result<String, PiyaError> {
     piya_send(message, FfiChatMode::Chat, history)
 }
@@ -240,31 +306,35 @@ pub fn piya_send(
     mode: FfiChatMode,
     history: Vec<FfiChatTurn>,
 ) -> Result<String, PiyaError> {
+    piya_send_with_attachments(message, Vec::new(), mode, history)
+}
+
+#[uniffi::export]
+pub fn piya_send_with_attachments(
+    message: String,
+    attachments: Vec<FfiAttachment>,
+    mode: FfiChatMode,
+    history: Vec<FfiChatTurn>,
+) -> Result<String, PiyaError> {
     let settings = load_settings()?;
-    match mode {
-        FfiChatMode::Chat => {
-            let turns: Vec<ChatTurn> = history
-                .into_iter()
-                .map(|t| ChatTurn {
-                    role: t.role,
-                    text: t.text,
-                })
-                .collect();
-            chat_service::chat_reply(&settings, &turns, &message).map_err(|err| PiyaError::Chat {
-                message: format!("{err:#}"),
-            })
-        }
-        FfiChatMode::Task => {
-            let queue = TaskQueue::new(settings.data_dir.join("piya.db")).map_err(|err| {
-                PiyaError::Chat {
-                    message: format!("{err:#}"),
-                }
-            })?;
-            let outcome = converse_task(&queue, &settings, &message);
-            spawn_if_needed(&settings, &outcome);
-            Ok(outcome.reply)
-        }
-    }
+    let turns: Vec<ChatTurn> = history
+        .into_iter()
+        .map(|t| ChatTurn {
+            role: t.role,
+            text: t.text,
+            attachments: t.attachments.into_iter().map(ffi_to_att).collect(),
+        })
+        .collect();
+    let user_atts: Vec<crate::attachments::ChatAttachment> =
+        attachments.into_iter().map(ffi_to_att).collect();
+    let intent = match mode {
+        FfiChatMode::Chat => chat_service::ChatIntent::Chat,
+        FfiChatMode::Task => chat_service::ChatIntent::Task,
+    };
+    chat_service::chat_reply_with_attachments(&settings, &turns, &message, &user_atts, intent)
+        .map_err(|err| PiyaError::Chat {
+            message: format!("{err:#}"),
+        })
 }
 
 #[derive(uniffi::Record, Clone, Debug)]
@@ -573,6 +643,7 @@ pub fn piya_bootstrap_app_support() -> Result<String, PiyaError> {
             config::write_app_support_config(&settings).map_err(map_err)?;
         }
     }
+    let _ = crate::db::open(&settings.data_dir);
     Ok(settings.data_dir.display().to_string())
 }
 
@@ -593,6 +664,8 @@ pub fn piya_cancel_chat() {
 pub struct FfiUserPrefs {
     pub profile: String,
     pub auto_capture_prefs: bool,
+    pub learn_from_conversations: bool,
+    pub remember_sensitive: bool,
     pub digest_enabled: bool,
     pub digest_hour: u32,
 }
@@ -604,6 +677,8 @@ pub fn piya_get_user_prefs() -> Result<FfiUserPrefs, PiyaError> {
     Ok(FfiUserPrefs {
         profile: prefs.profile,
         auto_capture_prefs: prefs.auto_capture_prefs,
+        learn_from_conversations: prefs.learn_from_conversations,
+        remember_sensitive: prefs.remember_sensitive,
         digest_enabled: prefs.digest_enabled,
         digest_hour: prefs.digest_hour,
     })
@@ -615,6 +690,8 @@ pub fn piya_save_user_prefs(prefs: FfiUserPrefs) -> Result<(), PiyaError> {
     let mut stored = crate::prefs::UserPrefs::load(&settings.data_dir).unwrap_or_default();
     stored.profile = prefs.profile;
     stored.auto_capture_prefs = prefs.auto_capture_prefs;
+    stored.learn_from_conversations = prefs.learn_from_conversations;
+    stored.remember_sensitive = prefs.remember_sensitive;
     stored.digest_enabled = prefs.digest_enabled;
     stored.digest_hour = prefs.digest_hour.min(23);
     stored.save(&settings.data_dir).map_err(map_err)
@@ -622,9 +699,6 @@ pub fn piya_save_user_prefs(prefs: FfiUserPrefs) -> Result<(), PiyaError> {
 
 #[derive(uniffi::Record, Clone, Debug)]
 pub struct FfiAppEnvSettings {
-    pub openai_api_key: String,
-    pub openai_base_url: String,
-    pub model: String,
     pub notify: String,
     pub shell_policy: String,
 }
@@ -634,9 +708,6 @@ pub fn piya_get_app_env_settings() -> Result<FfiAppEnvSettings, PiyaError> {
     let _ = load_settings()?;
     let env = config::AppEnvSettings::load_from_env();
     Ok(FfiAppEnvSettings {
-        openai_api_key: env.openai_api_key,
-        openai_base_url: env.openai_base_url,
-        model: env.model,
         notify: env.notify,
         shell_policy: env.shell_policy,
     })
@@ -645,15 +716,187 @@ pub fn piya_get_app_env_settings() -> Result<FfiAppEnvSettings, PiyaError> {
 #[uniffi::export]
 pub fn piya_save_app_env_settings(env: FfiAppEnvSettings) -> Result<(), PiyaError> {
     let payload = config::AppEnvSettings {
-        openai_api_key: env.openai_api_key,
-        openai_base_url: env.openai_base_url,
-        model: env.model,
         notify: env.notify,
         shell_policy: env.shell_policy,
     };
     payload.save_to_app_support().map_err(map_err)?;
-    crate::chat_engine::invalidate_llm();
     Ok(())
+}
+
+// ----- Models ---------------------------------------------------------------
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiProvider {
+    pub id: String,
+    pub label: String,
+    pub default_base_url: String,
+    pub needs_key: bool,
+    pub local: bool,
+    pub key_url: String,
+    pub supports_embeddings: bool,
+    pub default_embedding_model: String,
+    pub suggested_model: String,
+    /// Key already saved for this provider (so switching back needs no re-paste).
+    pub saved_key: String,
+    pub saved_base_url: String,
+}
+
+#[uniffi::export]
+pub fn piya_list_providers() -> Vec<FfiProvider> {
+    let _ = load_settings();
+    crate::providers::PROVIDERS
+        .iter()
+        .map(|p| FfiProvider {
+            id: p.id.into(),
+            label: p.label.into(),
+            default_base_url: p.default_base_url.into(),
+            needs_key: p.needs_key,
+            local: p.local,
+            key_url: p.key_url.into(),
+            supports_embeddings: p.embeddings,
+            default_embedding_model: p.default_embedding_model.into(),
+            suggested_model: p.suggested_model.into(),
+            saved_key: crate::providers::saved_key(p.id),
+            saved_base_url: crate::providers::saved_base_url(p.id),
+        })
+        .collect()
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiModelSettings {
+    pub provider: String,
+    pub api_key: String,
+    pub base_url: String,
+    pub model: String,
+    /// `none` turns memory search off.
+    pub embed_provider: String,
+    pub embed_api_key: String,
+    pub embed_base_url: String,
+    pub embedding_model: String,
+}
+
+#[uniffi::export]
+pub fn piya_get_model_settings() -> Result<FfiModelSettings, PiyaError> {
+    let _ = load_settings()?;
+    let m = config::ModelSettings::load_from_env();
+    Ok(FfiModelSettings {
+        provider: m.provider,
+        api_key: m.api_key,
+        base_url: m.base_url,
+        model: m.model,
+        embed_provider: m.embed_provider,
+        embed_api_key: m.embed_api_key,
+        embed_base_url: m.embed_base_url,
+        embedding_model: m.embedding_model,
+    })
+}
+
+#[uniffi::export]
+pub fn piya_save_model_settings(settings: FfiModelSettings) -> Result<(), PiyaError> {
+    let _ = load_settings()?;
+    let m = config::ModelSettings {
+        provider: settings.provider,
+        api_key: settings.api_key,
+        base_url: settings.base_url,
+        model: settings.model,
+        embed_provider: settings.embed_provider,
+        embed_api_key: settings.embed_api_key,
+        embed_base_url: settings.embed_base_url,
+        embedding_model: settings.embedding_model,
+    };
+    m.save_to_app_support().map_err(map_err)?;
+    crate::chat_engine::invalidate_llm();
+    // A running worker still holds the old model; it restarts on the next task.
+    restart_idle_worker();
+    Ok(())
+}
+
+/// Stop a worker that has nothing in progress so the next task starts one with the new model.
+fn restart_idle_worker() {
+    let Ok(settings) = load_settings() else { return };
+    let Ok(queue) = TaskQueue::new(settings.data_dir.join("piya.db")) else { return };
+    if queue.count(Some(crate::tasks::TaskStatus::InProgress)).unwrap_or(1) > 0 {
+        return;
+    }
+    let lock = crate::worker::worker_lock_path(&settings.data_dir);
+    if let Ok(pid) = std::fs::read_to_string(&lock) {
+        if let Ok(pid) = pid.trim().parse::<i32>() {
+            let _ = std::process::Command::new("kill").args(["-9", &pid.to_string()]).status();
+        }
+        let _ = std::fs::remove_file(&lock);
+    }
+    if queue.count_scheduled().unwrap_or(0) > 0 || queue.count_due_pending().unwrap_or(0) > 0 {
+        let _ = crate::worker::spawn_worker(&settings, &["run", "--continuous"]);
+    }
+}
+
+/// Live model ids from the provider account. `embeddings` lists embedding models only.
+#[uniffi::export]
+pub fn piya_list_models(
+    provider: String,
+    api_key: String,
+    base_url: String,
+    embeddings: bool,
+) -> Result<Vec<String>, PiyaError> {
+    let conn = crate::providers::Connection { provider, api_key, base_url };
+    crate::runtime::block_on(async move { crate::providers::list_models(&conn, embeddings).await })
+        .map_err(map_err)
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiModelProbe {
+    pub ok: bool,
+    pub message: String,
+}
+
+/// Send one tiny request with the given connection + model (chat or embeddings).
+#[uniffi::export]
+pub fn piya_test_model(
+    provider: String,
+    api_key: String,
+    base_url: String,
+    model: String,
+    embeddings: bool,
+) -> FfiModelProbe {
+    let result = (|| -> anyhow::Result<String> {
+        let mut settings = load_settings().map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        if embeddings {
+            settings.embed_provider = provider;
+            settings.embed_api_key = api_key;
+            settings.embed_base_url = base_url;
+            settings.embedding_model = model;
+        } else {
+            settings.provider = provider;
+            settings.api_key = api_key;
+            settings.base_url = base_url;
+            settings.model = model;
+        }
+        let llm = crate::llm::LlmClient::new(&settings)?;
+        crate::runtime::block_on(async move {
+            if embeddings {
+                if llm.embedding_id().is_none() {
+                    anyhow::bail!("choose a provider and embeddings model first");
+                }
+                let v = llm.embed(&["ping".to_string()]).await?;
+                let n = v.first().map(|e| e.len()).unwrap_or(0);
+                Ok(format!("Embeddings work ({n} dimensions)."))
+            } else {
+                let reply = llm.chat("Reply with exactly: OK", "ping", false).await?;
+                let reply: String = reply.trim().chars().take(40).collect();
+                Ok(format!("Connected to {} — replied \"{reply}\".", llm.describe()))
+            }
+        })
+    })();
+    match result {
+        Ok(message) => FfiModelProbe { ok: true, message },
+        Err(err) => FfiModelProbe { ok: false, message: format!("{err:#}") },
+    }
+}
+
+/// Warning when a pasted key looks like another provider's (empty when fine/unknown).
+#[uniffi::export]
+pub fn piya_key_warning(provider: String, api_key: String) -> String {
+    crate::providers::key_mismatch_warning(&provider, &api_key).unwrap_or_default()
 }
 
 #[derive(uniffi::Record, Clone, Debug)]
@@ -691,4 +934,443 @@ pub fn piya_delete_memory(id: String) -> Result<(), PiyaError> {
     let settings = load_settings()?;
     let (_llm, memory) = crate::chat_engine::llm_and_memory(&settings).map_err(map_err)?;
     crate::runtime::block_on(async move { memory.delete_by_id(&id).await }).map_err(map_err)
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiUpdateCheck {
+    pub current_version: String,
+    pub latest_version: String,
+    pub update_available: bool,
+    pub release_url: String,
+    pub release_notes: String,
+    pub published_at: String,
+    pub has_asset: bool,
+}
+
+#[uniffi::export]
+pub fn piya_check_for_update() -> Result<FfiUpdateCheck, PiyaError> {
+    let check = crate::updater::check_for_update().map_err(map_err)?;
+    Ok(FfiUpdateCheck {
+        current_version: check.current_version,
+        latest_version: check.latest_version,
+        update_available: check.update_available,
+        release_url: check.release_url,
+        release_notes: check.release_notes,
+        published_at: check.published_at,
+        has_asset: check.asset_url.is_some(),
+    })
+}
+
+/// Downloads and stages the latest release in `/Applications/.Piya-update.noindex`,
+/// verifies SHA-256 and code signature, and spawns a detached helper that atomically
+/// swaps `/Applications/Piya.app` and relaunches once this GUI process exits.
+#[uniffi::export]
+pub fn piya_install_update_and_relaunch() -> Result<String, PiyaError> {
+    crate::updater::prepare_gui_self_update().map_err(map_err)
+}
+
+// ----- Major alerts -----------------------------------------------------------
+
+/// "Snooze" on a major alert: show it again (as a major alert) in `minutes`.
+#[uniffi::export]
+pub fn piya_snooze_alert(title: String, body: String, minutes: u32) -> Result<String, PiyaError> {
+    let settings = load_settings()?;
+    let queue = TaskQueue::new(settings.data_dir.join("piya.db")).map_err(map_err)?;
+    let args = serde_json::json!({
+        "kind": "reminder",
+        "title": title,
+        "message": if body.trim().is_empty() { title.clone() } else { body },
+        "in_minutes": minutes.max(1),
+        "major": true,
+    });
+    let out = crate::chat_tools::schedule::create(&queue, &args, chrono::Utc::now()).map_err(map_err)?;
+    let _ = crate::worker::spawn_worker(&settings, &["run", "--continuous"]);
+    Ok(out)
+}
+
+/// Settings → Notifications → "Test major alert".
+#[uniffi::export]
+pub fn piya_test_major_alert() {
+    let _ = load_settings();
+    crate::notify::major_alert("Test major alert", "This stays on screen until you dismiss it.");
+}
+
+// ----- Structured Notes & Learned Skills --------------------------------------
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiNote {
+    pub id: String,
+    pub area: String,
+    pub slug: String,
+    pub text: String,
+    pub status: String,
+    pub origin: String,
+    pub evidence_count: i64,
+    pub quote: String,
+    pub expires_at: String,
+    pub updated_at: String,
+}
+
+fn note_to_ffi(n: crate::notes::Note) -> FfiNote {
+    FfiNote {
+        id: n.id,
+        area: n.area,
+        slug: n.slug,
+        text: n.text,
+        status: n.status,
+        origin: n.origin,
+        evidence_count: n.evidence_count,
+        quote: n.quote,
+        expires_at: n.expires_at.unwrap_or_default(),
+        updated_at: n.updated_at,
+    }
+}
+
+#[uniffi::export]
+pub fn piya_list_notes(include_archived: bool) -> Result<Vec<FfiNote>, PiyaError> {
+    let settings = load_settings()?;
+    let conn = crate::db::open(&settings.data_dir).map_err(map_err)?;
+    let notes = crate::notes::list_all(&conn, include_archived).map_err(map_err)?;
+    Ok(notes.into_iter().map(note_to_ffi).collect())
+}
+
+#[uniffi::export]
+pub fn piya_save_note(
+    id: String,
+    area: String,
+    slug: String,
+    text: String,
+) -> Result<FfiNote, PiyaError> {
+    let settings = load_settings()?;
+    let conn = crate::db::open(&settings.data_dir).map_err(map_err)?;
+    let id_opt = (!id.trim().is_empty()).then_some(id.as_str());
+    let slug_opt = (!slug.trim().is_empty()).then_some(slug.as_str());
+    let saved = crate::notes::save_manual_note(&conn, id_opt, &area, slug_opt, &text)
+        .map_err(map_err)?;
+    Ok(note_to_ffi(saved))
+}
+
+#[uniffi::export]
+pub fn piya_confirm_note(id: String) -> Result<FfiNote, PiyaError> {
+    let settings = load_settings()?;
+    let conn = crate::db::open(&settings.data_dir).map_err(map_err)?;
+    let saved = crate::notes::confirm_note(&conn, &id).map_err(map_err)?;
+    Ok(note_to_ffi(saved))
+}
+
+#[uniffi::export]
+pub fn piya_forget_note(id: String) -> Result<(), PiyaError> {
+    let settings = load_settings()?;
+    let conn = crate::db::open(&settings.data_dir).map_err(map_err)?;
+    let _ = crate::notes::forget_note(&conn, &id).map_err(map_err)?;
+    Ok(())
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiLearnedSkill {
+    pub name: String,
+    pub description: String,
+    pub body: String,
+    pub user_edited: bool,
+    pub use_count: i64,
+    pub updated_at: String,
+}
+
+fn skill_to_ffi(s: crate::skills::LearnedSkill) -> FfiLearnedSkill {
+    FfiLearnedSkill {
+        name: s.name,
+        description: s.description,
+        body: s.body,
+        user_edited: s.user_edited,
+        use_count: s.use_count,
+        updated_at: s.updated_at,
+    }
+}
+
+#[uniffi::export]
+pub fn piya_list_skills() -> Result<Vec<FfiLearnedSkill>, PiyaError> {
+    let settings = load_settings()?;
+    let conn = crate::db::open(&settings.data_dir).map_err(map_err)?;
+    let skills = crate::skills::list_skills(&conn).map_err(map_err)?;
+    Ok(skills.into_iter().map(skill_to_ffi).collect())
+}
+
+#[uniffi::export]
+pub fn piya_save_skill(
+    name: String,
+    description: String,
+    body: String,
+) -> Result<FfiLearnedSkill, PiyaError> {
+    let settings = load_settings()?;
+    let conn = crate::db::open(&settings.data_dir).map_err(map_err)?;
+    let saved = crate::skills::save_skill(&conn, &name, &description, &body, true)
+        .map_err(map_err)?;
+    Ok(skill_to_ffi(saved))
+}
+
+#[uniffi::export]
+pub fn piya_delete_skill(name: String) -> Result<(), PiyaError> {
+    let settings = load_settings()?;
+    let conn = crate::db::open(&settings.data_dir).map_err(map_err)?;
+    crate::skills::delete_skill(&conn, &name).map_err(map_err)
+}
+
+#[uniffi::export]
+pub fn piya_run_reflection(force: bool) -> Result<String, PiyaError> {
+    let settings = load_settings()?;
+    let report = crate::runtime::block_on(async move {
+        crate::reflect::reflect_if_due(&settings, force).await
+    })
+    .map_err(map_err)?;
+    if !report.ran_reflection {
+        return Ok(format!(
+            "Nothing new to reflect on (repaired: {} expired, {} duplicates merged).",
+            report.expired_archived, report.duplicates_merged
+        ));
+    }
+    Ok(format!(
+        "Reviewed {} messages — {} saved, {} confirmed, {} updated.",
+        report.messages_scanned,
+        report.notes_saved,
+        report.notes_promoted,
+        report.notes_replaced
+    ))
+}
+
+#[uniffi::export]
+pub fn piya_export_memory_markdown() -> Result<String, PiyaError> {
+    let settings = load_settings()?;
+    let conn = crate::db::open(&settings.data_dir).map_err(map_err)?;
+    crate::notes::export_markdown(&conn).map_err(map_err)
+}
+
+// ----- Desktop Activity Tracking ----------------------------------------------
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiActivitySettings {
+    pub mode: String,
+    pub paused_until: i64,
+    pub is_paused: bool,
+    pub excluded_apps: Vec<String>,
+    pub retention_days: u32,
+}
+
+fn activity_settings_from_prefs(prefs: &crate::prefs::UserPrefs) -> FfiActivitySettings {
+    let now = chrono::Utc::now().timestamp();
+    let mode = crate::activity::normalize_mode(&prefs.activity_mode).to_string();
+    FfiActivitySettings {
+        is_paused: mode == "off" || prefs.activity_paused_until > now,
+        mode,
+        paused_until: prefs.activity_paused_until,
+        excluded_apps: prefs.activity_excluded_apps.clone(),
+        retention_days: prefs.activity_retention_days,
+    }
+}
+
+#[uniffi::export]
+pub fn piya_get_activity_settings() -> Result<FfiActivitySettings, PiyaError> {
+    let settings = load_settings()?;
+    let prefs = crate::prefs::UserPrefs::load(&settings.data_dir).unwrap_or_default();
+    Ok(activity_settings_from_prefs(&prefs))
+}
+
+#[uniffi::export]
+pub fn piya_save_activity_settings(
+    mode: String,
+    retention_days: u32,
+    excluded_apps: Vec<String>,
+) -> Result<FfiActivitySettings, PiyaError> {
+    let settings = load_settings()?;
+    let mut prefs = crate::prefs::UserPrefs::load(&settings.data_dir).unwrap_or_default();
+    prefs.activity_mode = crate::activity::normalize_mode(&mode).to_string();
+    prefs.activity_retention_days = retention_days;
+    prefs.activity_excluded_apps = excluded_apps
+        .into_iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    if prefs.activity_mode != "off" && prefs.activity_paused_until > 0 {
+        // Leave timed pause intact unless user explicitly resumed; no-op here.
+    }
+    prefs.save(&settings.data_dir).map_err(map_err)?;
+    if let Ok(conn) = crate::db::open(&settings.data_dir) {
+        let _ = crate::activity::prune_old_events(&conn, prefs.activity_retention_days);
+    }
+    Ok(activity_settings_from_prefs(&prefs))
+}
+
+/// Pause activity capture for `minutes` (`0` resumes immediately).
+#[uniffi::export]
+pub fn piya_pause_activity(minutes: u32) -> Result<FfiActivitySettings, PiyaError> {
+    let settings = load_settings()?;
+    let mut prefs = crate::prefs::UserPrefs::load(&settings.data_dir).unwrap_or_default();
+    if minutes == 0 {
+        prefs.activity_paused_until = 0;
+    } else {
+        prefs.activity_paused_until = chrono::Utc::now().timestamp() + (minutes as i64) * 60;
+    }
+    prefs.save(&settings.data_dir).map_err(map_err)?;
+    Ok(activity_settings_from_prefs(&prefs))
+}
+
+#[uniffi::export]
+pub fn piya_record_activity(
+    app_name: String,
+    bundle_id: String,
+    window_title: String,
+    url_or_path: String,
+    screen_text: String,
+    capture_kind: String,
+    is_focused: bool,
+) -> Result<bool, PiyaError> {
+    let settings = load_settings()?;
+    let prefs = crate::prefs::UserPrefs::load(&settings.data_dir).unwrap_or_default();
+    let conn = crate::db::open(&settings.data_dir).map_err(map_err)?;
+    crate::activity::record_snapshot(
+        &conn,
+        &prefs,
+        crate::activity::ActivitySnapshotInput {
+            app_name,
+            bundle_id,
+            window_title,
+            url_or_path,
+            screen_text,
+            capture_kind,
+            timestamp: None,
+            is_focused,
+        },
+    )
+    .map_err(map_err)
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiActivityEvent {
+    pub id: i64,
+    pub started_at: i64,
+    pub ended_at: i64,
+    pub duration_sec: i64,
+    pub app_name: String,
+    pub bundle_id: String,
+    pub window_title: String,
+    pub url_or_path: String,
+    pub capture_mode: String,
+    pub screen_text: String,
+}
+
+fn event_to_ffi(e: crate::activity::ActivityEvent) -> FfiActivityEvent {
+    FfiActivityEvent {
+        id: e.id,
+        started_at: e.started_at,
+        ended_at: e.ended_at,
+        duration_sec: e.duration_sec,
+        app_name: e.app_name,
+        bundle_id: e.bundle_id,
+        window_title: e.window_title,
+        url_or_path: e.url_or_path,
+        capture_mode: e.capture_mode,
+        screen_text: e.screen_text,
+    }
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiAppUsageStat {
+    pub app_name: String,
+    pub bundle_id: String,
+    pub seconds: i64,
+    pub top_window: String,
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiWorkJournalEntry {
+    pub id: i64,
+    pub started_at: i64,
+    pub ended_at: i64,
+    pub duration_sec: i64,
+    pub project: String,
+    pub task_summary: String,
+    pub details: String,
+    pub apps: Vec<String>,
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiActivityToday {
+    pub day: String,
+    pub total_active_sec: i64,
+    pub summary: String,
+    pub top_apps: Vec<FfiAppUsageStat>,
+    pub journal_entries: Vec<FfiWorkJournalEntry>,
+    pub recent_events: Vec<FfiActivityEvent>,
+}
+
+#[uniffi::export]
+pub fn piya_get_activity_today(limit: u32) -> Result<FfiActivityToday, PiyaError> {
+    let settings = load_settings()?;
+    let conn = crate::db::open(&settings.data_dir).map_err(map_err)?;
+    let today = chrono::Local::now().date_naive();
+    let day_summary = crate::activity::get_day_summary(&conn, today).map_err(map_err)?;
+    let (start, end) = crate::activity::local_day_bounds(today);
+    let lim = if limit == 0 { 50 } else { limit as usize };
+    let events = crate::activity::list_events_between(&conn, start, end, lim).map_err(map_err)?;
+    let journal = crate::activity::list_journal_between(&conn, start, end, 25).unwrap_or_default();
+    Ok(FfiActivityToday {
+        day: day_summary.day,
+        total_active_sec: day_summary.total_active_sec,
+        summary: day_summary.summary,
+        top_apps: day_summary
+            .top_apps
+            .into_iter()
+            .map(|s| FfiAppUsageStat {
+                app_name: s.app_name,
+                bundle_id: s.bundle_id,
+                seconds: s.seconds,
+                top_window: s.top_window,
+            })
+            .collect(),
+        journal_entries: journal
+            .into_iter()
+            .map(|j| FfiWorkJournalEntry {
+                id: j.id,
+                started_at: j.started_at,
+                ended_at: j.ended_at,
+                duration_sec: j.duration_sec,
+                project: j.project,
+                task_summary: j.task_summary,
+                details: j.details,
+                apps: j.apps,
+            })
+            .collect(),
+        recent_events: events.into_iter().map(event_to_ffi).collect(),
+    })
+}
+
+/// Synthesize Little Bird-style active work threads from recent window + OCR snapshots.
+#[uniffi::export]
+pub fn piya_sync_activity_journal(force: bool) -> Result<u32, PiyaError> {
+    let settings = load_settings()?;
+    let saved = crate::activity::sync_work_journal_blocking(&settings, force).map_err(map_err)?;
+    Ok(saved as u32)
+}
+
+#[uniffi::export]
+pub fn piya_search_activity(query: String, limit: u32) -> Result<Vec<FfiActivityEvent>, PiyaError> {
+    let settings = load_settings()?;
+    let conn = crate::db::open(&settings.data_dir).map_err(map_err)?;
+    let lim = if limit == 0 { 30 } else { limit as usize };
+    let hits = crate::activity::search_events(&conn, &query, None, None, lim).map_err(map_err)?;
+    Ok(hits.into_iter().map(event_to_ffi).collect())
+}
+
+#[uniffi::export]
+pub fn piya_delete_activity_event(id: i64) -> Result<(), PiyaError> {
+    let settings = load_settings()?;
+    let conn = crate::db::open(&settings.data_dir).map_err(map_err)?;
+    crate::activity::delete_event(&conn, id).map_err(map_err)
+}
+
+#[uniffi::export]
+pub fn piya_clear_activity(today_only: bool) -> Result<u32, PiyaError> {
+    let settings = load_settings()?;
+    let conn = crate::db::open(&settings.data_dir).map_err(map_err)?;
+    let deleted = crate::activity::clear_activity(&conn, today_only).map_err(map_err)?;
+    Ok(deleted as u32)
 }

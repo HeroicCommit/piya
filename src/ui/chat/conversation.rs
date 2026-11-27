@@ -13,6 +13,7 @@ pub fn reply(
         .map(|m| ChatTurn {
             role: m.role.clone(),
             text: m.text.clone(),
+            attachments: Vec::new(),
         })
         .collect();
 
