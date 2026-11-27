@@ -186,6 +186,41 @@ const MIGRATIONS: &[&str] = &[
         updated_at       TEXT NOT NULL
     );
     "#,
+    // 5: Little Bird-style active work journal synthesized from window + OCR stream
+    r#"
+    CREATE TABLE IF NOT EXISTS activity_journal (
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        started_at    INTEGER NOT NULL,
+        ended_at      INTEGER NOT NULL,
+        duration_sec  INTEGER NOT NULL DEFAULT 0,
+        project       TEXT NOT NULL DEFAULT '',
+        task_summary  TEXT NOT NULL,
+        details       TEXT NOT NULL DEFAULT '',
+        apps_json     TEXT NOT NULL DEFAULT '[]',
+        created_at    TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_activity_journal_started ON activity_journal(started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_activity_journal_ended ON activity_journal(ended_at DESC);
+
+    CREATE VIRTUAL TABLE IF NOT EXISTS activity_journal_fts USING fts5(
+        project, task_summary, details,
+        content='activity_journal', content_rowid='id', tokenize='porter unicode61'
+    );
+    CREATE TRIGGER IF NOT EXISTS activity_journal_ai AFTER INSERT ON activity_journal BEGIN
+        INSERT INTO activity_journal_fts(rowid, project, task_summary, details)
+        VALUES (new.id, new.project, new.task_summary, new.details);
+    END;
+    CREATE TRIGGER IF NOT EXISTS activity_journal_ad AFTER DELETE ON activity_journal BEGIN
+        INSERT INTO activity_journal_fts(activity_journal_fts, rowid, project, task_summary, details)
+        VALUES ('delete', old.id, old.project, old.task_summary, old.details);
+    END;
+    CREATE TRIGGER IF NOT EXISTS activity_journal_au AFTER UPDATE OF project, task_summary, details ON activity_journal BEGIN
+        INSERT INTO activity_journal_fts(activity_journal_fts, rowid, project, task_summary, details)
+        VALUES ('delete', old.id, old.project, old.task_summary, old.details);
+        INSERT INTO activity_journal_fts(rowid, project, task_summary, details)
+        VALUES (new.id, new.project, new.task_summary, new.details);
+    END;
+    "#,
 ];
 
 fn migrate(conn: &Connection) -> Result<()> {

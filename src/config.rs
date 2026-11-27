@@ -111,9 +111,33 @@ impl Settings {
 }
 
 fn path_from_env(key: &str, default: &str) -> PathBuf {
-    std::env::var(key)
+    let raw = std::env::var(key)
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(default))
+        .unwrap_or_else(|_| PathBuf::from(default));
+
+    // macOS `.app` bundles launched via LaunchServices / `open -a` run with `cwd = /`.
+    // If an inherited env var (e.g. from `./.env` during `piya update --local`) is relative
+    // like `./data`, resolving against `/` fails with EROFS (`/data`). Prefer the absolute
+    // path saved in `~/Library/Application Support/Piya/.env`, else anchor in App Support.
+    let cwd_is_root = std::env::current_dir()
+        .map(|d| d == std::path::Path::new("/"))
+        .unwrap_or(true);
+    if raw.is_relative() && cwd_is_root {
+        if let Some(env_path) = app_support_env_file() {
+            let saved = read_env_file_map(&env_path);
+            if let Some(val) = saved.get(key).map(|s| PathBuf::from(s.trim())) {
+                if val.is_absolute() {
+                    set_proc_env(key, &val.to_string_lossy());
+                    return val;
+                }
+            }
+        }
+        if let Some(support) = app_support_dir() {
+            let clean = raw.strip_prefix("./").unwrap_or(&raw);
+            return support.join(clean);
+        }
+    }
+    raw
 }
 
 fn parse_env<T: std::str::FromStr>(key: &str, default: T) -> Result<T>

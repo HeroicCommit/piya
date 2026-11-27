@@ -728,15 +728,17 @@ public struct FfiActivityToday {
     public var totalActiveSec: Int64
     public var summary: String
     public var topApps: [FfiAppUsageStat]
+    public var journalEntries: [FfiWorkJournalEntry]
     public var recentEvents: [FfiActivityEvent]
 
     // Default memberwise initializers are never public by default, so we
     // declare one manually.
-    public init(day: String, totalActiveSec: Int64, summary: String, topApps: [FfiAppUsageStat], recentEvents: [FfiActivityEvent]) {
+    public init(day: String, totalActiveSec: Int64, summary: String, topApps: [FfiAppUsageStat], journalEntries: [FfiWorkJournalEntry], recentEvents: [FfiActivityEvent]) {
         self.day = day
         self.totalActiveSec = totalActiveSec
         self.summary = summary
         self.topApps = topApps
+        self.journalEntries = journalEntries
         self.recentEvents = recentEvents
     }
 }
@@ -760,6 +762,9 @@ extension FfiActivityToday: Equatable, Hashable {
         if lhs.topApps != rhs.topApps {
             return false
         }
+        if lhs.journalEntries != rhs.journalEntries {
+            return false
+        }
         if lhs.recentEvents != rhs.recentEvents {
             return false
         }
@@ -771,6 +776,7 @@ extension FfiActivityToday: Equatable, Hashable {
         hasher.combine(totalActiveSec)
         hasher.combine(summary)
         hasher.combine(topApps)
+        hasher.combine(journalEntries)
         hasher.combine(recentEvents)
     }
 }
@@ -788,6 +794,7 @@ public struct FfiConverterTypeFfiActivityToday: FfiConverterRustBuffer {
                 totalActiveSec: FfiConverterInt64.read(from: &buf), 
                 summary: FfiConverterString.read(from: &buf), 
                 topApps: FfiConverterSequenceTypeFfiAppUsageStat.read(from: &buf), 
+                journalEntries: FfiConverterSequenceTypeFfiWorkJournalEntry.read(from: &buf), 
                 recentEvents: FfiConverterSequenceTypeFfiActivityEvent.read(from: &buf)
         )
     }
@@ -797,6 +804,7 @@ public struct FfiConverterTypeFfiActivityToday: FfiConverterRustBuffer {
         FfiConverterInt64.write(value.totalActiveSec, into: &buf)
         FfiConverterString.write(value.summary, into: &buf)
         FfiConverterSequenceTypeFfiAppUsageStat.write(value.topApps, into: &buf)
+        FfiConverterSequenceTypeFfiWorkJournalEntry.write(value.journalEntries, into: &buf)
         FfiConverterSequenceTypeFfiActivityEvent.write(value.recentEvents, into: &buf)
     }
 }
@@ -2687,6 +2695,124 @@ public func FfiConverterTypeFfiUserPrefs_lower(_ value: FfiUserPrefs) -> RustBuf
     return FfiConverterTypeFfiUserPrefs.lower(value)
 }
 
+
+public struct FfiWorkJournalEntry {
+    public var id: Int64
+    public var startedAt: Int64
+    public var endedAt: Int64
+    public var durationSec: Int64
+    public var project: String
+    public var taskSummary: String
+    public var details: String
+    public var apps: [String]
+
+    // Default memberwise initializers are never public by default, so we
+    // declare one manually.
+    public init(id: Int64, startedAt: Int64, endedAt: Int64, durationSec: Int64, project: String, taskSummary: String, details: String, apps: [String]) {
+        self.id = id
+        self.startedAt = startedAt
+        self.endedAt = endedAt
+        self.durationSec = durationSec
+        self.project = project
+        self.taskSummary = taskSummary
+        self.details = details
+        self.apps = apps
+    }
+}
+
+#if compiler(>=6)
+extension FfiWorkJournalEntry: Sendable {}
+#endif
+
+
+extension FfiWorkJournalEntry: Equatable, Hashable {
+    public static func ==(lhs: FfiWorkJournalEntry, rhs: FfiWorkJournalEntry) -> Bool {
+        if lhs.id != rhs.id {
+            return false
+        }
+        if lhs.startedAt != rhs.startedAt {
+            return false
+        }
+        if lhs.endedAt != rhs.endedAt {
+            return false
+        }
+        if lhs.durationSec != rhs.durationSec {
+            return false
+        }
+        if lhs.project != rhs.project {
+            return false
+        }
+        if lhs.taskSummary != rhs.taskSummary {
+            return false
+        }
+        if lhs.details != rhs.details {
+            return false
+        }
+        if lhs.apps != rhs.apps {
+            return false
+        }
+        return true
+    }
+
+    public func hash(into hasher: inout Hasher) {
+        hasher.combine(id)
+        hasher.combine(startedAt)
+        hasher.combine(endedAt)
+        hasher.combine(durationSec)
+        hasher.combine(project)
+        hasher.combine(taskSummary)
+        hasher.combine(details)
+        hasher.combine(apps)
+    }
+}
+
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public struct FfiConverterTypeFfiWorkJournalEntry: FfiConverterRustBuffer {
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> FfiWorkJournalEntry {
+        return
+            try FfiWorkJournalEntry(
+                id: FfiConverterInt64.read(from: &buf), 
+                startedAt: FfiConverterInt64.read(from: &buf), 
+                endedAt: FfiConverterInt64.read(from: &buf), 
+                durationSec: FfiConverterInt64.read(from: &buf), 
+                project: FfiConverterString.read(from: &buf), 
+                taskSummary: FfiConverterString.read(from: &buf), 
+                details: FfiConverterString.read(from: &buf), 
+                apps: FfiConverterSequenceString.read(from: &buf)
+        )
+    }
+
+    public static func write(_ value: FfiWorkJournalEntry, into buf: inout [UInt8]) {
+        FfiConverterInt64.write(value.id, into: &buf)
+        FfiConverterInt64.write(value.startedAt, into: &buf)
+        FfiConverterInt64.write(value.endedAt, into: &buf)
+        FfiConverterInt64.write(value.durationSec, into: &buf)
+        FfiConverterString.write(value.project, into: &buf)
+        FfiConverterString.write(value.taskSummary, into: &buf)
+        FfiConverterString.write(value.details, into: &buf)
+        FfiConverterSequenceString.write(value.apps, into: &buf)
+    }
+}
+
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiWorkJournalEntry_lift(_ buf: RustBuffer) throws -> FfiWorkJournalEntry {
+    return try FfiConverterTypeFfiWorkJournalEntry.lift(buf)
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
+public func FfiConverterTypeFfiWorkJournalEntry_lower(_ value: FfiWorkJournalEntry) -> RustBuffer {
+    return FfiConverterTypeFfiWorkJournalEntry.lower(value)
+}
+
 // Note that we don't yet support `indirect` for enums.
 // See https://github.com/mozilla/uniffi-rs/issues/396 for further discussion.
 
@@ -3215,6 +3341,31 @@ fileprivate struct FfiConverterSequenceTypeFfiTaskItem: FfiConverterRustBuffer {
 #if swift(>=5.8)
 @_documentation(visibility: private)
 #endif
+fileprivate struct FfiConverterSequenceTypeFfiWorkJournalEntry: FfiConverterRustBuffer {
+    typealias SwiftType = [FfiWorkJournalEntry]
+
+    public static func write(_ value: [FfiWorkJournalEntry], into buf: inout [UInt8]) {
+        let len = Int32(value.count)
+        writeInt(&buf, len)
+        for item in value {
+            FfiConverterTypeFfiWorkJournalEntry.write(item, into: &buf)
+        }
+    }
+
+    public static func read(from buf: inout (data: Data, offset: Data.Index)) throws -> [FfiWorkJournalEntry] {
+        let len: Int32 = try readInt(&buf)
+        var seq = [FfiWorkJournalEntry]()
+        seq.reserveCapacity(Int(len))
+        for _ in 0 ..< len {
+            seq.append(try FfiConverterTypeFfiWorkJournalEntry.read(from: &buf))
+        }
+        return seq
+    }
+}
+
+#if swift(>=5.8)
+@_documentation(visibility: private)
+#endif
 fileprivate struct FfiConverterDictionaryStringString: FfiConverterRustBuffer {
     public static func write(_ value: [String: String], into buf: inout [UInt8]) {
         let len = Int32(value.count)
@@ -3485,7 +3636,7 @@ public func piyaQueueSummary()throws  -> FfiQueueSummary  {
     )
 })
 }
-public func piyaRecordActivity(appName: String, bundleId: String, windowTitle: String, urlOrPath: String, screenText: String, captureKind: String)throws  -> Bool  {
+public func piyaRecordActivity(appName: String, bundleId: String, windowTitle: String, urlOrPath: String, screenText: String, captureKind: String, isFocused: Bool)throws  -> Bool  {
     return try  FfiConverterBool.lift(try rustCallWithError(FfiConverterTypePiyaError_lift) {
     uniffi_piya_fn_func_piya_record_activity(
         FfiConverterString.lower(appName),
@@ -3493,7 +3644,8 @@ public func piyaRecordActivity(appName: String, bundleId: String, windowTitle: S
         FfiConverterString.lower(windowTitle),
         FfiConverterString.lower(urlOrPath),
         FfiConverterString.lower(screenText),
-        FfiConverterString.lower(captureKind),$0
+        FfiConverterString.lower(captureKind),
+        FfiConverterBool.lower(isFocused),$0
     )
 })
 }
@@ -3633,6 +3785,16 @@ public func piyaStageAttachment(sessionId: String, sourcePath: String, displayNa
         FfiConverterString.lower(sourcePath),
         FfiConverterString.lower(displayName),
         FfiConverterString.lower(extractedText),$0
+    )
+})
+}
+/**
+ * Synthesize Little Bird-style active work threads from recent window + OCR snapshots.
+ */
+public func piyaSyncActivityJournal(force: Bool)throws  -> UInt32  {
+    return try  FfiConverterUInt32.lift(try rustCallWithError(FfiConverterTypePiyaError_lift) {
+    uniffi_piya_fn_func_piya_sync_activity_journal(
+        FfiConverterBool.lower(force),$0
     )
 })
 }
@@ -3809,7 +3971,7 @@ private let initializationResult: InitializationResult = {
     if (uniffi_piya_checksum_func_piya_queue_summary() != 55962) {
         return InitializationResult.apiChecksumMismatch
     }
-    if (uniffi_piya_checksum_func_piya_record_activity() != 30992) {
+    if (uniffi_piya_checksum_func_piya_record_activity() != 28451) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_piya_checksum_func_piya_run_pending_tasks() != 20878) {
@@ -3861,6 +4023,9 @@ private let initializationResult: InitializationResult = {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_piya_checksum_func_piya_stage_attachment() != 30895) {
+        return InitializationResult.apiChecksumMismatch
+    }
+    if (uniffi_piya_checksum_func_piya_sync_activity_journal() != 27264) {
         return InitializationResult.apiChecksumMismatch
     }
     if (uniffi_piya_checksum_func_piya_test_major_alert() != 28471) {

@@ -447,7 +447,7 @@ RustBuffer uniffi_piya_fn_func_piya_queue_summary(RustCallStatus *_Nonnull out_s
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_RECORD_ACTIVITY
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_RECORD_ACTIVITY
-int8_t uniffi_piya_fn_func_piya_record_activity(RustBuffer app_name, RustBuffer bundle_id, RustBuffer window_title, RustBuffer url_or_path, RustBuffer screen_text, RustBuffer capture_kind, RustCallStatus *_Nonnull out_status
+int8_t uniffi_piya_fn_func_piya_record_activity(RustBuffer app_name, RustBuffer bundle_id, RustBuffer window_title, RustBuffer url_or_path, RustBuffer screen_text, RustBuffer capture_kind, int8_t is_focused, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_RUN_PENDING_TASKS
@@ -534,6 +534,11 @@ RustBuffer uniffi_piya_fn_func_piya_snooze_alert(RustBuffer title, RustBuffer bo
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_STAGE_ATTACHMENT
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_STAGE_ATTACHMENT
 RustBuffer uniffi_piya_fn_func_piya_stage_attachment(RustBuffer session_id, RustBuffer source_path, RustBuffer display_name, RustBuffer extracted_text, RustCallStatus *_Nonnull out_status
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_SYNC_ACTIVITY_JOURNAL
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_SYNC_ACTIVITY_JOURNAL
+uint32_t uniffi_piya_fn_func_piya_sync_activity_journal(int8_t force, RustCallStatus *_Nonnull out_status
 );
 #endif
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_FN_FUNC_PIYA_TEST_MAJOR_ALERT
@@ -1164,6 +1169,12 @@ uint16_t uniffi_piya_checksum_func_piya_snooze_alert(void
 #ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_STAGE_ATTACHMENT
 #define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_STAGE_ATTACHMENT
 uint16_t uniffi_piya_checksum_func_piya_stage_attachment(void
+    
+);
+#endif
+#ifndef UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_SYNC_ACTIVITY_JOURNAL
+#define UNIFFI_FFIDEF_UNIFFI_PIYA_CHECKSUM_FUNC_PIYA_SYNC_ACTIVITY_JOURNAL
+uint16_t uniffi_piya_checksum_func_piya_sync_activity_journal(void
     
 );
 #endif

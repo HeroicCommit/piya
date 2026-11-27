@@ -85,6 +85,18 @@ private struct CheckForUpdatesMenuButton: View {
     }
 }
 
+private struct ActivitySettingsMenuButton: View {
+    let label: String
+    @Environment(\.openSettings) private var openSettings
+
+    var body: some View {
+        Button(label) {
+            UpdateController.shared.selectedSettingsTab = .activity
+            SettingsMenuButton.openAndRaiseSettings(using: openSettings)
+        }
+    }
+}
+
 @main
 struct PiyaApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -100,16 +112,19 @@ struct PiyaApp: App {
             Divider()
 
             if activity.settings.mode == "off" {
-                Button("Activity Tracking: Off") {
-                    UpdateController.shared.selectedSettingsTab = .activity
-                }
-                .disabled(true)
+                ActivitySettingsMenuButton(label: "Activity Tracking: Off…")
             } else if activity.settings.isPaused {
                 Button("Resume Activity Tracking") {
                     activity.pause(minutes: 0)
                 }
+            } else if activity.needsPermissionAttention {
+                ActivitySettingsMenuButton(
+                    label: "⚠️ Activity OCR Needs macOS Permission…"
+                )
             } else {
                 Menu("Activity Tracking: On (\(Self.modeLabel(activity.settings.mode)))") {
+                    ActivitySettingsMenuButton(label: "View Today's Work Threads…")
+                    Divider()
                     Button("Pause for 1 Hour") {
                         activity.pause(minutes: 60)
                     }

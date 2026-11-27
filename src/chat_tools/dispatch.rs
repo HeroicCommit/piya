@@ -75,12 +75,16 @@ pub fn system_hint() -> &'static str {
      • Only substantial multi-step work (research reports, writing documents, multi-file changes) → \
        `piya_task_queue` with a clear `done_when`. ONE task per request: research + writing + checking for the \
        same goal go in a single task's brief; never split one request into several tasks.\n\
-     • Questions about tasks, results or why something happened → `piya_task_status` / `piya_schedule_list`. \
-       Never queue a task to answer a question.\n\
-     • Questions about what the user is working on, what apps/windows/tabs/documents they used today, \
-       yesterday, or this week, or searching something they saw on screen → `piya_activity_query` \
-       (and check the Live desktop context block). NEVER auto-create tasks or reminders from observed screen \
-       activity unless the user explicitly asks you to create one.\n\
+     • Questions about Piya's own background errands/scheduled reminders or why a Piya errand failed → \
+       `piya_task_status` / `piya_schedule_list`. Never queue a task to answer a question.\n\
+     • Questions about what the USER has been working on ('what am I working on?', 'what tasks have I been \
+       working on?', 'summarize my work / day / projects', 'what did I do so far?', or searching something \
+       seen on screen) → ALWAYS call `piya_activity_query` (NEVER `piya_task_status` unless they also ask \
+       about Piya's scheduled reminders!). Summarize concrete WORK THREADS, tasks, projects, files, URLs, and \
+       topics from the synthesized work journal and screen OCR — NEVER just list bare app names like 'Safari 30m, \
+       Chrome 15m'. If `piya_activity_query` shows a PERMISSION DIAGNOSTIC warning (0 window titles/OCR), \
+       clearly tell the user how to enable/refresh Screen Recording & Accessibility in Piya → Settings → Activity. \
+       NEVER auto-create tasks or reminders from observed screen activity unless explicitly asked.\n\
      Verification: only say something is scheduled/cancelled/done when a tool result says so \
      (e.g. 'Saved ✔', 'Cancelled ✔'), and quote the time it reports. If a tool fails, say what failed. \
      When you run a shell command, tell the user the exact command. If the user declines a permission prompt, \
@@ -542,17 +546,17 @@ fn patch_skill(settings: &Settings, args: &Value) -> Result<String> {
 fn activity_tools() -> Vec<ChatCompletionTool> {
     vec![tool(
         "piya_activity_query",
-        "Inspect or search the user's local desktop activity timeline (active apps, window titles, \
-         browser URLs/paths, time spent, daily rollups, and captured screen text). Use when the user \
-         asks what they are working on, what they did today/yesterday/this week, how long they spent \
-         in an app/project, or asks about something they saw on screen earlier. Omit `query` for a \
-         chronological timeline & app breakdown; pass `query` for full-text search.",
+        "Inspect or search the user's local desktop activity & Little Bird-style work journal (synthesized \
+         work threads/tasks, projects, active windows, browser URLs/file paths, time spent, and on-device \
+         screen OCR). ALWAYS call this when the user asks what they have been working on, what tasks/projects \
+         they worked on today/yesterday/this week, or asks about something they saw on screen. Omit `query` \
+         for synthesized work threads + full timeline; pass `query` for full-text search across OCR & threads.",
         json!({
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Optional keywords to search across window titles, URLs, file paths, and screen text."
+                    "description": "Optional keywords to search across work threads, window titles, URLs, file paths, and screen OCR."
                 },
                 "period": {
                     "type": "string",
@@ -577,7 +581,6 @@ fn activity_tools() -> Vec<ChatCompletionTool> {
 }
 
 fn query_activity(settings: &Settings, args: &Value) -> Result<String> {
-    let conn = crate::db::open(&settings.data_dir)?;
     let query = args.get("query").and_then(|v| v.as_str());
     let period = args.get("period").and_then(|v| v.as_str());
     let since = args.get("since").and_then(|v| v.as_str());
@@ -588,7 +591,7 @@ fn query_activity(settings: &Settings, args: &Value) -> Result<String> {
         .map(|n| n as usize)
         .unwrap_or(30)
         .clamp(1, 100);
-    crate::activity::query_for_tool(&conn, query, period, since, until, limit)
+    crate::activity::query_for_tool_with_settings(settings, query, period, since, until, limit)
 }
 
 pub(crate) fn tool(name: &str, description: &str, parameters: Value) -> ChatCompletionTool {

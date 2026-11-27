@@ -673,9 +673,19 @@ pub fn apply_staged_update_cli(
     }
 
     if was_running {
+        let abs_data = settings
+            .data_dir
+            .canonicalize()
+            .unwrap_or_else(|_| settings.data_dir.clone());
+        let abs_ws = settings
+            .workspace
+            .canonicalize()
+            .unwrap_or_else(|_| settings.workspace.clone());
         Command::new("open")
             .arg("-a")
             .arg(dest_app)
+            .env("PIYA_DATA_DIR", abs_data)
+            .env("PIYA_WORKSPACE", abs_ws)
             .status()
             .context("relaunch updated Piya.app")?;
     }

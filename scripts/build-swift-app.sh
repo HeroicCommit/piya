@@ -164,8 +164,35 @@ cat > "$APP/Contents/Info.plist" <<EOF
 </plist>
 EOF
 
-SIGN_IDENTITY="${PIYA_CODESIGN_IDENTITY:--}"
-codesign --force --deep --sign "$SIGN_IDENTITY" "$APP" 2>/dev/null || true
+resolve_signing_identity() {
+  if [[ -n "${PIYA_CODESIGN_IDENTITY:-}" ]]; then
+    echo "$PIYA_CODESIGN_IDENTITY"
+    return
+  fi
+  local identities
+  identities="$(security find-identity -v -p codesigning 2>/dev/null || true)"
+  local match=""
+  for pattern in "Developer ID Application:" "Piya Local Code Signing" "Apple Development:"; do
+    match="$(printf '%s\n' "$identities" | grep -F "$pattern" | head -1 | sed -E 's/.*"([^"]+)".*/\1/' || true)"
+    if [[ -n "$match" ]]; then
+      echo "$match"
+      return
+    fi
+  done
+  echo "-"
+}
+
+SIGN_IDENTITY="$(resolve_signing_identity)"
+if [[ "$SIGN_IDENTITY" == "-" ]]; then
+  echo "==> Signing $APP (ad-hoc '-' — NOTE: macOS TCC permissions reset on rebuilds; run ./scripts/setup-signing-cert.sh once to keep permissions across updates)"
+else
+  echo "==> Signing $APP with persistent identity: $SIGN_IDENTITY"
+fi
+
+# Sign nested Mach-O binaries inside-out (Apple TN2206) so macOS TCC designated requirements stay valid across updates.
+codesign --force --sign "$SIGN_IDENTITY" "$APP/Contents/Frameworks/libpiya.dylib"
+codesign --force --sign "$SIGN_IDENTITY" "$APP/Contents/Helpers/piya"
+codesign --force --identifier "${BUNDLE_ID}" --sign "$SIGN_IDENTITY" "$APP"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -u "$APP" 2>/dev/null || true
 
 echo ""

@@ -14,18 +14,20 @@ struct ActivitySettingsTab: View {
         totalActiveSec: 0,
         summary: "",
         topApps: [],
+        journalEntries: [],
         recentEvents: []
     )
     @State private var searchQuery = ""
     @State private var searchResults: [FfiActivityEvent] = []
     @State private var isSearching = false
+    @State private var isSyncingJournal = false
     @State private var status = ""
 
     private let modes: [(String, String, String)] = [
         (
             "full",
-            "Full (Apps + Window Text + Screen OCR)",
-            "Tracks active apps, window titles, URLs/paths, Accessibility text, plus on-device Apple Vision OCR for canvases/PDFs (screenshots are discarded immediately)."
+            "Full (Active Screen OCR + Window Text + Work Journal)",
+            "Continuously tracks active apps, browser tabs/URLs, editor files, and accurate Retina Vision OCR — synthesizing concrete tasks & work threads locally."
         ),
         (
             "text_only",
@@ -59,9 +61,10 @@ struct ActivitySettingsTab: View {
         Form {
             captureModeSection
             permissionsSection
-            privacyAndRetentionSection
+            workThreadsSection
             todaySummarySection
             timelineSection
+            privacyAndRetentionSection
         }
         .formStyle(.grouped)
         .padding()
@@ -120,11 +123,23 @@ struct ActivitySettingsTab: View {
                         status = "Activity tracking resumed."
                     }
                     .controlSize(.small)
+                } else if observer.needsPermissionAttention {
+                    Label(
+                        activeMode == "full"
+                            ? "Waiting for Screen Recording permission — OCR is currently blocked by macOS"
+                            : "Waiting for Accessibility permission — window text is currently blocked",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.orange)
                 } else if activeMode != "off" {
+                    let charsBadge = observer.lastCapturedChars > 0
+                        ? " · \(observer.lastCapturedChars) chars captured"
+                        : ""
                     Label(
                         observer.lastObservedLabel.isEmpty
-                            ? "Active (\(modeDisplayName(activeMode))) — watching foreground window changes"
-                            : "Last seen (\(modeDisplayName(activeMode))): \(observer.lastObservedLabel)",
+                            ? "Active (\(modeDisplayName(activeMode))) — watching foreground windows & OCR"
+                            : "Last seen (\(modeDisplayName(activeMode))\(charsBadge)): \(observer.lastObservedLabel)",
                         systemImage: "record.circle"
                     )
                     .font(.caption)
@@ -143,7 +158,7 @@ struct ActivitySettingsTab: View {
         } header: {
             Text("Desktop Activity & Work Context")
         } footer: {
-            Text("All activity stays local in data/piya.db. Piya uses it to answer “what am I working on?” or “what did I do today?” without creating automatic tasks.")
+            Text("All OCR text and synthesized work threads stay 100% local in data/piya.db. Screenshots are processed in memory by Apple Vision and discarded immediately.")
                 .font(.caption)
         }
     }
@@ -153,8 +168,8 @@ struct ActivitySettingsTab: View {
             HStack {
                 Label(
                     observer.hasAccessibilityPermission
-                        ? "Accessibility granted (window titles, URLs & window text)"
-                        : "Accessibility not active yet (needed for URLs & Text Only mode)",
+                        ? "Accessibility granted (window titles, browser URLs & Electron text)"
+                        : "Accessibility not active for this build (needed for URLs & editor paths)",
                     systemImage: observer.hasAccessibilityPermission ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
                 )
                 .font(.callout)
@@ -174,8 +189,8 @@ struct ActivitySettingsTab: View {
                 HStack {
                     Label(
                         observer.hasScreenCapturePermission
-                            ? "Screen Recording granted (Full mode Vision OCR active)"
-                            : "Screen Recording not active in this session",
+                            ? "Screen Recording granted (Retina Vision OCR active)"
+                            : "Screen Recording not active for this build (OCR blocked until granted & relaunched)",
                         systemImage: observer.hasScreenCapturePermission ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
                     )
                     .font(.callout)
@@ -210,8 +225,183 @@ struct ActivitySettingsTab: View {
             Text("macOS Permissions")
         } footer: {
             if !observer.hasAccessibilityPermission || (activeMode == "full" && !observer.hasScreenCapturePermission) {
-                Text("Tip: If Piya is already toggled ON in System Settings from an earlier update, toggle Piya OFF and back ON once (then click Relaunch Piya to Apply) so macOS updates the permission for the new build.")
+                Text("Clicking “Open Screen Recording…” or “Grant Accessibility…” automatically clears any stale signature from an older build so you only need to allow Piya once (then click “Relaunch Piya to Apply”).")
                     .font(.caption)
+            }
+        }
+    }
+
+    private var workThreadsSection: some View {
+        Section {
+            if todayData.journalEntries.isEmpty {
+                Text(
+                    observer.needsPermissionAttention
+                        ? "Grant Screen Recording & Accessibility above so Piya can read active windows and synthesize your work threads."
+                        : "No work threads synthesized yet today. Work across a few windows with OCR active, or click “Synthesize Now”."
+                )
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            } else {
+                ForEach(todayData.journalEntries, id: \.id) { item in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 6) {
+                            Text("\(Self.formatTime(item.startedAt))–\(Self.formatTime(item.endedAt))")
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                            if !item.project.isEmpty {
+                                Text(item.project)
+                                    .font(.caption2.weight(.semibold))
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 1)
+                                    .background(Color.accentColor.opacity(0.14), in: Capsule())
+                            }
+                            Spacer()
+                            Text(Self.formatDuration(item.durationSec))
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                        Text(item.taskSummary)
+                            .font(.callout.weight(.medium))
+                        if !item.details.isEmpty {
+                            Text(item.details)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        if !item.apps.isEmpty {
+                            Text(item.apps.joined(separator: " · "))
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    .padding(.vertical, 3)
+                }
+            }
+
+            HStack(spacing: 10) {
+                Button(isSyncingJournal ? "Synthesizing…" : "Synthesize Work Now") {
+                    syncJournalNow()
+                }
+                .controlSize(.small)
+                .disabled(isSyncingJournal)
+
+                Button("Refresh") {
+                    reloadTimeline()
+                }
+                .controlSize(.small)
+            }
+        } header: {
+            Text("Active Work Threads Today")
+        } footer: {
+            Text("Synthesized automatically in the background (and whenever you ask Piya “what have I been working on?”) from your window titles, URLs, and on-device OCR.")
+                .font(.caption)
+        }
+    }
+
+    private var todaySummarySection: some View {
+        Section("App Time Today (\(todayData.day.isEmpty ? "—" : todayData.day))") {
+            if todayData.totalActiveSec == 0 {
+                Text("No desktop activity recorded today yet. Switch between a couple of windows and click Refresh.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            } else {
+                LabeledContent("Active time tracked") {
+                    Text(Self.formatDuration(todayData.totalActiveSec))
+                        .font(.system(.body, design: .monospaced).weight(.semibold))
+                }
+                ForEach(todayData.topApps.prefix(6), id: \.appName) { stat in
+                    HStack {
+                        Text(stat.appName)
+                            .font(.callout.weight(.medium))
+                        if !stat.topWindow.isEmpty && stat.topWindow != stat.appName {
+                            Text("· \(stat.topWindow)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                        Spacer()
+                        Text(Self.formatDuration(stat.seconds))
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    private var timelineSection: some View {
+        Section("Recent Window & OCR Timeline") {
+            HStack {
+                TextField("Search work threads, window titles, URLs, or screen OCR…", text: $searchQuery)
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit(runSearch)
+                if !searchQuery.isEmpty {
+                    Button("Clear") {
+                        searchQuery = ""
+                        isSearching = false
+                        searchResults = []
+                    }
+                    .controlSize(.small)
+                } else {
+                    Button("Search") { runSearch() }
+                        .controlSize(.small)
+                        .disabled(searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+
+            let items = isSearching ? searchResults : todayData.recentEvents
+            if items.isEmpty {
+                Text(isSearching ? "No matching activity events." : "No recent window events.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(items.prefix(30), id: \.id) { ev in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 8) {
+                            Text(Self.formatTime(ev.startedAt))
+                                .font(.system(.caption2, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                            Text(ev.appName)
+                                .font(.callout.weight(.medium))
+                            Text(Self.captureBadge(ev))
+                                .font(.caption2)
+                                .foregroundStyle(ev.screenText.isEmpty && ev.captureMode != "app_only" ? .orange : .secondary)
+                            Text(Self.formatDuration(ev.durationSec))
+                                .font(.caption2)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 1)
+                                .background(.quaternary, in: Capsule())
+                            Spacer()
+                            Button(role: .destructive) {
+                                deleteEvent(ev.id)
+                            } label: {
+                                Image(systemName: "trash")
+                                    .font(.caption)
+                            }
+                            .buttonStyle(.borderless)
+                            .help("Delete this activity entry")
+                        }
+                        if !ev.windowTitle.isEmpty {
+                            Text(ev.windowTitle)
+                                .font(.caption)
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                        }
+                        if !ev.urlOrPath.isEmpty {
+                            Text(ev.urlOrPath)
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                                .lineLimit(1)
+                        }
+                        if let snippet = Self.previewSnippet(ev.screenText) {
+                            Text(snippet)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(2)
+                        }
+                    }
+                    .padding(.vertical, 2)
+                }
             }
         }
     }
@@ -282,113 +472,6 @@ struct ActivitySettingsTab: View {
         }
     }
 
-    private var todaySummarySection: some View {
-        Section("Today (\(todayData.day.isEmpty ? "—" : todayData.day))") {
-            if todayData.totalActiveSec == 0 {
-                Text("No desktop activity recorded today yet. Switch between a couple of windows and click Refresh.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-            } else {
-                LabeledContent("Active time tracked") {
-                    Text(Self.formatDuration(todayData.totalActiveSec))
-                        .font(.system(.body, design: .monospaced).weight(.semibold))
-                }
-                ForEach(todayData.topApps.prefix(6), id: \.appName) { stat in
-                    HStack {
-                        Text(stat.appName)
-                            .font(.callout.weight(.medium))
-                        if !stat.topWindow.isEmpty && stat.topWindow != stat.appName {
-                            Text("· \(stat.topWindow)")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                        Spacer()
-                        Text(Self.formatDuration(stat.seconds))
-                            .font(.system(.caption, design: .monospaced))
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-
-            Button("Refresh") {
-                reloadTimeline()
-            }
-            .controlSize(.small)
-        }
-    }
-
-    private var timelineSection: some View {
-        Section("Recent Window Timeline & Search") {
-            HStack {
-                TextField("Search window titles, URLs, or screen text…", text: $searchQuery)
-                    .textFieldStyle(.roundedBorder)
-                    .onSubmit(runSearch)
-                if !searchQuery.isEmpty {
-                    Button("Clear") {
-                        searchQuery = ""
-                        isSearching = false
-                        searchResults = []
-                    }
-                    .controlSize(.small)
-                } else {
-                    Button("Search") { runSearch() }
-                        .controlSize(.small)
-                        .disabled(searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                }
-            }
-
-            let items = isSearching ? searchResults : todayData.recentEvents
-            if items.isEmpty {
-                Text(isSearching ? "No matching activity events." : "No recent window events.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(items.prefix(30), id: \.id) { ev in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack(spacing: 8) {
-                            Text(Self.formatTime(ev.startedAt))
-                                .font(.system(.caption2, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                            Text(ev.appName)
-                                .font(.callout.weight(.medium))
-                            Text(ev.captureMode == "full" ? "Full" : (ev.captureMode == "app_only" ? "App" : "Text"))
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                            Text(Self.formatDuration(ev.durationSec))
-                                .font(.caption2)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 1)
-                                .background(.quaternary, in: Capsule())
-                            Spacer()
-                            Button(role: .destructive) {
-                                deleteEvent(ev.id)
-                            } label: {
-                                Image(systemName: "trash")
-                                    .font(.caption)
-                            }
-                            .buttonStyle(.borderless)
-                            .help("Delete this activity entry")
-                        }
-                        if !ev.windowTitle.isEmpty {
-                            Text(ev.windowTitle)
-                                .font(.caption)
-                                .foregroundStyle(.primary)
-                                .lineLimit(1)
-                        }
-                        if !ev.urlOrPath.isEmpty {
-                            Text(ev.urlOrPath)
-                                .font(.caption2)
-                                .foregroundStyle(.tertiary)
-                                .lineLimit(1)
-                        }
-                    }
-                    .padding(.vertical, 2)
-                }
-            }
-        }
-    }
-
     // MARK: - Helpers
 
     private func modeDisplayName(_ raw: String) -> String {
@@ -399,11 +482,32 @@ struct ActivitySettingsTab: View {
         }
     }
 
+    private static func captureBadge(_ ev: FfiActivityEvent) -> String {
+        let count = ev.screenText.count
+        switch ev.captureMode {
+        case "full":
+            return count > 0 ? "OCR · \(count) chars" : "Full (0 chars)"
+        case "app_only":
+            return "App"
+        default:
+            return count > 0 ? "Text · \(count) chars" : "No text"
+        }
+    }
+
+    private static func previewSnippet(_ raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let lines = trimmed
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { $0.count >= 4 && $0 != "[Screen OCR]:" && $0 != "[Earlier in window]:" }
+            .prefix(2)
+        guard !lines.isEmpty else { return nil }
+        return lines.joined(separator: " · ")
+    }
+
     private func selectMode(_ newMode: String) {
         persistSettings(mode: newMode)
-        if newMode == "full" && !observer.hasScreenCapturePermission {
-            observer.requestScreenCapturePermission()
-        }
     }
 
     private func loadAll() {
@@ -418,6 +522,21 @@ struct ActivitySettingsTab: View {
     private func reloadTimeline() {
         if let t = try? PiyaBackend.activityToday(limit: 40) {
             todayData = t
+        }
+    }
+
+    private func syncJournalNow() {
+        isSyncingJournal = true
+        status = ""
+        Task.detached(priority: .userInitiated) {
+            let n = (try? PiyaBackend.syncActivityJournal(force: true)) ?? 0
+            await MainActor.run {
+                self.isSyncingJournal = false
+                self.reloadTimeline()
+                self.status = n > 0
+                    ? "Synthesized \(n) work thread(s)."
+                    : "No new titled/OCR windows to synthesize yet."
+            }
         }
     }
 

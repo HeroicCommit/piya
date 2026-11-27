@@ -643,6 +643,7 @@ pub fn piya_bootstrap_app_support() -> Result<String, PiyaError> {
             config::write_app_support_config(&settings).map_err(map_err)?;
         }
     }
+    let _ = crate::db::open(&settings.data_dir);
     Ok(settings.data_dir.display().to_string())
 }
 
@@ -1220,6 +1221,7 @@ pub fn piya_record_activity(
     url_or_path: String,
     screen_text: String,
     capture_kind: String,
+    is_focused: bool,
 ) -> Result<bool, PiyaError> {
     let settings = load_settings()?;
     let prefs = crate::prefs::UserPrefs::load(&settings.data_dir).unwrap_or_default();
@@ -1235,6 +1237,7 @@ pub fn piya_record_activity(
             screen_text,
             capture_kind,
             timestamp: None,
+            is_focused,
         },
     )
     .map_err(map_err)
@@ -1278,11 +1281,24 @@ pub struct FfiAppUsageStat {
 }
 
 #[derive(uniffi::Record, Clone, Debug)]
+pub struct FfiWorkJournalEntry {
+    pub id: i64,
+    pub started_at: i64,
+    pub ended_at: i64,
+    pub duration_sec: i64,
+    pub project: String,
+    pub task_summary: String,
+    pub details: String,
+    pub apps: Vec<String>,
+}
+
+#[derive(uniffi::Record, Clone, Debug)]
 pub struct FfiActivityToday {
     pub day: String,
     pub total_active_sec: i64,
     pub summary: String,
     pub top_apps: Vec<FfiAppUsageStat>,
+    pub journal_entries: Vec<FfiWorkJournalEntry>,
     pub recent_events: Vec<FfiActivityEvent>,
 }
 
@@ -1295,6 +1311,7 @@ pub fn piya_get_activity_today(limit: u32) -> Result<FfiActivityToday, PiyaError
     let (start, end) = crate::activity::local_day_bounds(today);
     let lim = if limit == 0 { 50 } else { limit as usize };
     let events = crate::activity::list_events_between(&conn, start, end, lim).map_err(map_err)?;
+    let journal = crate::activity::list_journal_between(&conn, start, end, 25).unwrap_or_default();
     Ok(FfiActivityToday {
         day: day_summary.day,
         total_active_sec: day_summary.total_active_sec,
@@ -1309,8 +1326,29 @@ pub fn piya_get_activity_today(limit: u32) -> Result<FfiActivityToday, PiyaError
                 top_window: s.top_window,
             })
             .collect(),
+        journal_entries: journal
+            .into_iter()
+            .map(|j| FfiWorkJournalEntry {
+                id: j.id,
+                started_at: j.started_at,
+                ended_at: j.ended_at,
+                duration_sec: j.duration_sec,
+                project: j.project,
+                task_summary: j.task_summary,
+                details: j.details,
+                apps: j.apps,
+            })
+            .collect(),
         recent_events: events.into_iter().map(event_to_ffi).collect(),
     })
+}
+
+/// Synthesize Little Bird-style active work threads from recent window + OCR snapshots.
+#[uniffi::export]
+pub fn piya_sync_activity_journal(force: bool) -> Result<u32, PiyaError> {
+    let settings = load_settings()?;
+    let saved = crate::activity::sync_work_journal_blocking(&settings, force).map_err(map_err)?;
+    Ok(saved as u32)
 }
 
 #[uniffi::export]

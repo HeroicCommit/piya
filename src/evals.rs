@@ -527,6 +527,7 @@ pub fn cases() -> Vec<Case> {
                         screen_text: "pub async fn verify_signature()".into(),
                         capture_kind: "text_only".into(),
                         timestamp: Some(now - 600),
+                        is_focused: true,
                     },
                 )
                 .expect("seed cursor");
@@ -541,6 +542,7 @@ pub fn cases() -> Vec<Case> {
                         screen_text: "Step 1: Connect workspace".into(),
                         capture_kind: "full".into(),
                         timestamp: Some(now - 60),
+                        is_focused: true,
                     },
                 )
                 .expect("seed figma");
@@ -576,6 +578,7 @@ pub fn cases() -> Vec<Case> {
                         screen_text: "Production Stripe webhook retry timeout is 47 seconds before dead-lettering.".into(),
                         capture_kind: "text_only".into(),
                         timestamp: Some(earlier),
+                        is_focused: true,
                     },
                 )
                 .expect("seed safari");
@@ -610,6 +613,7 @@ pub fn cases() -> Vec<Case> {
                             .into(),
                         capture_kind: "text_only".into(),
                         timestamp: Some(Utc::now().timestamp() - 10),
+                        is_focused: true,
                     },
                 )
                 .expect("seed arc");

@@ -82,6 +82,7 @@ pub fn repair(conn: &Connection) -> Result<(usize, usize, usize)> {
 pub async fn reflect_if_due(settings: &Settings, force: bool) -> Result<ReflectReport> {
     let today = Local::now().format("%Y-%m-%d").to_string();
     let prefs = UserPrefs::load(&settings.data_dir).unwrap_or_default();
+    let _ = crate::activity::synthesize_work_journal_if_due(settings, false).await;
 
     let (mut report, mut watermark, should_reflect) = {
         let conn = db::open(&settings.data_dir)?;

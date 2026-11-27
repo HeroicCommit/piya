@@ -371,7 +371,8 @@ enum PiyaBackend {
         windowTitle: String,
         urlOrPath: String,
         screenText: String,
-        captureKind: String
+        captureKind: String,
+        isFocused: Bool = true
     ) throws -> Bool {
         bootstrap()
         return try piyaRecordActivity(
@@ -380,13 +381,19 @@ enum PiyaBackend {
             windowTitle: windowTitle,
             urlOrPath: urlOrPath,
             screenText: screenText,
-            captureKind: captureKind
+            captureKind: captureKind,
+            isFocused: isFocused
         )
     }
 
     static func activityToday(limit: UInt32 = 40) throws -> FfiActivityToday {
         bootstrap()
         return try piyaGetActivityToday(limit: limit)
+    }
+
+    static func syncActivityJournal(force: Bool = false) throws -> UInt32 {
+        bootstrap()
+        return try piyaSyncActivityJournal(force: force)
     }
 
     static func searchActivity(query: String, limit: UInt32 = 30) throws -> [FfiActivityEvent] {

@@ -43,6 +43,18 @@ pub fn update_from_local(settings: &Settings, force: bool) -> Result<()> {
     let dest = PathBuf::from(crate::updater::INSTALLED_APP_PATH);
     let staged = crate::updater::stage_local_bundle(&source, &dest)?;
     crate::updater::apply_staged_update_cli(settings, &staged, &dest, force)?;
+    // Remove staged `dist/build.noindex/PiyaSwift.app` after installing to `/Applications/Piya.app`
+    // so LaunchServices & macOS TCC never see two `.app` bundles claiming `com.piya.swiftui`.
+    if source != dest && source.to_string_lossy().contains("build.noindex") {
+        let _ = std::fs::remove_dir_all(&source);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let lsreg = "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
+        if Path::new(lsreg).is_file() {
+            let _ = Command::new(lsreg).args(["-f", "/Applications/Piya.app"]).status();
+        }
+    }
     println!(
         "Updated {} in place (config, data, and login item untouched).",
         dest.display()
